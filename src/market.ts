@@ -51,9 +51,7 @@ export class SkillMarket {
   }
 
   private async trash(file: TFile) {
-    const manager = this.app.fileManager as unknown as { trashFile?: (file: TFile) => Promise<void> };
-    if (manager.trashFile) await manager.trashFile(file);
-    else await this.app.vault.trash(file, true);
+    await this.app.fileManager.trashFile(file);
   }
 
   server() {
@@ -67,9 +65,10 @@ export class SkillMarket {
     } catch {
       throw new Error('连不上易度服务器，请检查网络');
     }
-    let body: any = null;
+    type Reply = { retcode?: number; msg?: string; data?: unknown };
+    let body: Reply | null = null;
     try {
-      body = res.json;
+      body = res.json as Reply;
     } catch {
       body = null;
     }
@@ -138,7 +137,7 @@ export class SkillMarket {
       if (file instanceof TFile) await this.trash(file);
     }
     const folder = this.app.vault.getAbstractFileByPath(record.folder);
-    if (folder instanceof TFolder && !folder.children.length) await this.app.vault.delete(folder, true);
+    if (folder instanceof TFolder && !folder.children.length) await this.app.fileManager.trashFile(folder);
     delete state.packs[id];
     await writeState(this.app, 'skill-packs', state);
   }

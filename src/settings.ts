@@ -69,22 +69,25 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
-export function loadSettings(raw: any): Settings {
-  const legacy = { ...DEFAULT_SETTINGS.models[0], ...raw?.chat, id: 'm1' };
-  const models: ModelEntry[] = Array.isArray(raw?.models) && raw.models.length
-    ? raw.models.filter((item: any) => item && typeof item.id === 'string')
+type RawSettings = Partial<Omit<Settings, 'embed'>> & { chat?: Partial<ModelEntry>; embed?: Partial<ModelSetting> };
+
+export function loadSettings(input: unknown): Settings {
+  const raw = (input ?? {}) as RawSettings;
+  const legacy = { ...DEFAULT_SETTINGS.models[0], ...raw.chat, id: 'm1' };
+  const models: ModelEntry[] = Array.isArray(raw.models) && raw.models.length
+    ? raw.models.filter((item) => item && typeof item.id === 'string')
     : [legacy];
   const pick = (id: unknown) => (models.some((item) => item.id === id) ? (id as string) : models[0].id);
-  const { chat: _chat, ...rest } = raw ?? {};
+  const { chat: _chat, ...rest } = raw;
   void _chat;
   return {
     ...DEFAULT_SETTINGS,
     ...rest,
     models,
-    chatModel: pick(raw?.chatModel),
-    taskModel: pick(raw?.taskModel),
-    embed: { ...DEFAULT_SETTINGS.embed, ...raw?.embed },
-    keys: { ...raw?.keys }
+    chatModel: pick(raw.chatModel),
+    taskModel: pick(raw.taskModel),
+    embed: { ...DEFAULT_SETTINGS.embed, ...raw.embed },
+    keys: { ...raw.keys }
   };
 }
 
@@ -96,7 +99,7 @@ export function modelLabel(entry: ModelSetting): string {
   return `${provider(entry.provider).name.replace(/（.*?）/g, '')} · ${entry.model || '未填模型'}`;
 }
 
-export function resolveModel(settings: Settings, use: ModelUse | string): ModelEntry {
+export function resolveModel(settings: Settings, use: string): ModelEntry {
   const id = use === 'chat' ? settings.chatModel : use === 'task' ? settings.taskModel : use;
   return settings.models.find((item) => item.id === id) ?? settings.models[0];
 }
@@ -147,7 +150,7 @@ export class SettingTab extends PluginSettingTab {
     const state = containerEl.createEl('p', { cls: 'eai-hint', text: this.plugin.statusText() });
     new Setting(containerEl)
       .setName('连接方式')
-      .setDesc('连桌面版时，用的是 EduAIoT 对话框里选的模型；自己运行时，用下面填的模型和 API Key。')
+      .setDesc('连桌面版时，用的是 EduAIoT 对话框里选的模型；自己运行时，用下面填的模型和 API key。')
       .addDropdown((dropdown) => {
         for (const [value, label] of Object.entries(MODES)) dropdown.addOption(value, label);
         dropdown.setValue(settings.mode).onChange(async (value) => {
@@ -210,7 +213,7 @@ export class SettingTab extends PluginSettingTab {
         await this.plugin.saveSettings();
       }))
       .addDropdown((dropdown) => {
-        WEEKDAYS.forEach((label, i) => dropdown.addOption(String(i + 1), label));
+        for (const [i, label] of WEEKDAYS.entries()) dropdown.addOption(String(i + 1), label);
         dropdown.setValue(String(settings.weeklyDay)).onChange(async (value) => {
           settings.weeklyDay = Number(value);
           await this.plugin.saveSettings();
@@ -318,7 +321,7 @@ export class SettingTab extends PluginSettingTab {
     const preset = provider(entry.provider);
     if (preset.needsKey || preset.id === 'custom') {
       const key = new Setting(box)
-        .setName('API Key')
+        .setName('API key')
         .setDesc('同一家服务商的模型共用一个 Key，只保存在本机这个笔记库的插件设置里。')
         .addText((text) => {
           text.inputEl.type = 'password';
@@ -381,7 +384,7 @@ export class SettingTab extends PluginSettingTab {
       const preset = provider(current.provider);
       if (preset.needsKey || preset.id === 'custom') {
         const key = new Setting(box)
-          .setName('API Key')
+          .setName('API key')
           .setDesc(settings.models.some((item) => item.provider === current.provider) ? '和对话模型是同一家，共用一个 Key。' : '只保存在本机这个笔记库的插件设置里。')
           .addText((text) => {
             text.inputEl.type = 'password';

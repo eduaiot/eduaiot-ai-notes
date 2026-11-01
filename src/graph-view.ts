@@ -85,11 +85,11 @@ export class TopicGraphView extends ItemView {
     select.value = String(this.limit);
     select.onchange = () => {
       this.limit = Number(select.value);
-      void this.load();
+      void this.reload();
     };
     bar.createEl('button', { text: '居中' }).onclick = () => this.fit();
     bar.createEl('button', { text: '重新分析' }).onclick = async () => {
-      if (await this.plugin.topics.build(false)) await this.load();
+      if (await this.plugin.topics.build(false)) await this.reload();
     };
     this.legend = root.createDiv({ cls: 'eai-graph-legend' });
     const stage = root.createDiv({ cls: 'eai-graph-stage' });
@@ -100,7 +100,7 @@ export class TopicGraphView extends ItemView {
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(stage);
     this.bind();
-    await this.load();
+    await this.reload();
   }
 
   async onClose() {
@@ -108,7 +108,7 @@ export class TopicGraphView extends ItemView {
     this.observer?.disconnect();
   }
 
-  async load() {
+  async reload() {
     const state = await this.plugin.topics.state();
     const engine = this.plugin.local.engine;
     await this.plugin.local.start();
@@ -118,7 +118,7 @@ export class TopicGraphView extends ItemView {
     if (!state) {
       this.legend.createSpan({ cls: 'eai-hint', text: '还没有主题地图。' });
       this.legend.createEl('button', { cls: 'mod-cta', text: '生成主题地图' }).onclick = async () => {
-        if (await this.plugin.topics.build(false)) await this.load();
+        if (await this.plugin.topics.build(false)) await this.reload();
       };
       this.draw();
       return;
@@ -141,7 +141,7 @@ export class TopicGraphView extends ItemView {
       }
       const chip = this.legend.createSpan({ cls: 'eai-graph-chip', text: `${topic.name} · ${topic.paths.length} 篇` });
       if (topic.summary) chip.title = topic.summary;
-      chip.style.setProperty('--eai-topic', color(topic.id));
+      chip.setCssProps({ '--eai-topic': color(topic.id) });
       chip.toggleClass('is-off', this.hidden.has(topic.id));
       chip.onclick = () => {
         if (this.hidden.has(topic.id)) this.hidden.delete(topic.id);
@@ -173,7 +173,7 @@ export class TopicGraphView extends ItemView {
       edge.b.r = Math.min(edge.b.r + 1, 10);
     }
     const tip = this.legend.createSpan({ cls: 'eai-hint', text: '点笔记打开，拖动节点或背景，滚轮缩放。紫色虚线是跨领域连接，灰线是笔记之间的双链。' });
-    tip.style.marginLeft = 'auto';
+    tip.setCssStyles({ marginLeft: 'auto' });
     this.fit();
     this.kick();
   }
@@ -253,8 +253,7 @@ export class TopicGraphView extends ItemView {
     const ratio = window.devicePixelRatio || 1;
     this.canvas.width = Math.max(1, Math.floor(rect.width * ratio));
     this.canvas.height = Math.max(1, Math.floor(rect.height * ratio));
-    this.canvas.style.width = `${rect.width}px`;
-    this.canvas.style.height = `${rect.height}px`;
+    this.canvas.setCssStyles({ width: `${rect.width}px`, height: `${rect.height}px` });
     this.draw();
   }
 
@@ -401,7 +400,7 @@ export class TopicGraphView extends ItemView {
       const node = this.pick(event);
       if (node !== this.hover) {
         this.hover = node;
-        this.canvas.style.cursor = node ? 'pointer' : 'grab';
+        this.canvas.setCssStyles({ cursor: node ? 'pointer' : 'grab' });
         this.showTip(node, event);
         this.draw();
       } else if (node) {
@@ -443,8 +442,7 @@ export class TopicGraphView extends ItemView {
     const rect = this.canvas.getBoundingClientRect();
     const summary = this.summaries.get(node.topic) ?? '';
     this.tip.setText(node.kind === 'topic' ? `${node.label}${summary ? `\n${summary}` : ''}\n点一下放大` : `${node.label}\n${this.names.get(node.topic) ?? ''} · 点击打开`);
-    this.tip.style.left = `${event.clientX - rect.left + 12}px`;
-    this.tip.style.top = `${event.clientY - rect.top + 12}px`;
+    this.tip.setCssStyles({ left: `${event.clientX - rect.left + 12}px`, top: `${event.clientY - rect.top + 12}px` });
     this.tip.show();
   }
 

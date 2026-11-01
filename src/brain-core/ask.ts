@@ -43,7 +43,7 @@ export function askMessages(question: string, history: Turn[], groups: ContextGr
 const QUOTE = /「([^」\n]{2,300})」((?:\s*\[\d+\])*)/g;
 
 function plain(text: string): string {
-  return text.replace(/[\s*_`>#~=\[\]]/g, '').toLowerCase();
+  return text.replace(/[\s*_`>#~=[\]]/g, '').toLowerCase();
 }
 
 function found(quote: string, texts: string[]): boolean {

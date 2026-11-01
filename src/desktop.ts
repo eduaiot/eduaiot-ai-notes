@@ -17,8 +17,18 @@ interface DesktopHit {
   snippet: string;
 }
 
-function node(name: string) {
-  return (window as any).require(name);
+interface NodeModules {
+  path: { join(...parts: string[]): string };
+  os: { homedir(): string };
+  fs: { readFileSync(file: string, encoding: 'utf8'): string };
+}
+
+function node<K extends keyof NodeModules>(name: K): NodeModules[K] {
+  return (window as unknown as { require(id: string): NodeModules[K] }).require(name);
+}
+
+function env(name: string): string | undefined {
+  return (window as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[name];
 }
 
 function hit(item: DesktopHit): Hit {
@@ -33,14 +43,14 @@ export class DesktopBackend implements Backend {
 
   defaultFile(): string {
     const path = node('path');
-    const home = (globalThis as any).process?.env?.EDUAIOT_HOME || path.join(node('os').homedir(), '.dsh-eduaiot');
+    const home = env('EDUAIOT_HOME') || path.join(node('os').homedir(), '.dsh-eduaiot');
     return path.join(home, 'edu-obsidian-bridge.json');
   }
 
   private bridge(): Bridge {
     try {
-      const value = JSON.parse(node('fs').readFileSync(this.file() || this.defaultFile(), 'utf8'));
-      if (typeof value?.port === 'number' && typeof value?.token === 'string') return value;
+      const value = JSON.parse(node('fs').readFileSync(this.file() || this.defaultFile(), 'utf8')) as Partial<Bridge> | null;
+      if (typeof value?.port === 'number' && typeof value?.token === 'string') return { port: value.port, token: value.token };
     } catch {
       throw new Error(OFFLINE);
     }
@@ -91,13 +101,13 @@ export class DesktopBackend implements Backend {
     } catch {
       throw new Error(OFFLINE);
     }
-    let json: any = null;
+    let json: unknown = null;
     try {
       json = response.json;
     } catch {
       json = null;
     }
-    if (response.status !== 200) throw new Error(json?.error || `请求失败（${response.status}）`);
+    if (response.status !== 200) throw new Error((json as { error?: string } | null)?.error || `请求失败（${response.status}）`);
     return json as T;
   }
 }

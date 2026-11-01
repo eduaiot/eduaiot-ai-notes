@@ -1,8 +1,8 @@
 {
   "id": "eduaiot-ai-notes",
   "name": "EduAIoT AI Notes",
-  "version": "0.1.0",
-  "minAppVersion": "1.4.0",
+  "version": "0.1.1",
+  "minAppVersion": "1.7.2",
   "description": "Put your notes to work: ask your vault and get answers with sources, daily review, weekly reports, topic map, skills and note organizing, using your own LLM API key.",
   "author": "EduAIoT",
   "authorUrl": "https://eduaiot.com",

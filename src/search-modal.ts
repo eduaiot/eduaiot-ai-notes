@@ -18,7 +18,7 @@ export class SearchModal extends SuggestModal<Hit> {
   }
 
   onOpen() {
-    super.onOpen();
+    void super.onOpen();
     if (this.initial) {
       this.inputEl.value = this.initial;
       this.inputEl.dispatchEvent(new Event('input'));

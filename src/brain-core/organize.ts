@@ -120,7 +120,7 @@ export function parsePlan(text: string, existing: string[], base = ''): PlanFold
   for (const item of jsonList(text)) {
     if (!item || typeof item !== 'object') continue;
     const record = item as Record<string, unknown>;
-    let raw = String(record.path ?? '').trim().replace(/^\/+|\/+$/g, '');
+    let raw = (typeof record.path === 'string' ? record.path : '').trim().replace(/^\/+|\/+$/g, '');
     if (base && raw !== base && !raw.startsWith(`${base}/`)) raw = `${base}/${raw}`;
     const path = cleanFolder(raw, depth);
     if (!path || out.some((folder) => folder.path === path)) continue;

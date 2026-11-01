@@ -1,4 +1,4 @@
-import { debounce, ItemView, Notice, TFile, TFolder, WorkspaceLeaf } from 'obsidian';
+import { debounce, ItemView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import { message } from './backend';
 import { confirmDialog } from './confirm';
 import type AiNotesPlugin from './main';
@@ -517,7 +517,7 @@ export class OrganizeView extends ItemView {
       return;
     }
     if (!this.plugin.local.chatReady()) {
-      new Notice('还没有设置好对话模型，请在插件设置里填写 API Key');
+      new Notice('还没有设置好对话模型，请在插件设置里填写 API key');
       return;
     }
     const usable = paths.filter((path) => this.plugin.local.engine.has(path));

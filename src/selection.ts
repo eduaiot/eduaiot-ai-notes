@@ -106,8 +106,7 @@ export class SelectionTools {
     let top = below ? rect.bottom + 8 : rect.top - height - 8;
     if (top < 8) top = rect.bottom + 8;
     if (top + height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - height - 8);
-    el.style.left = `${left}px`;
-    el.style.top = `${top}px`;
+    el.setCssStyles({ left: `${left}px`, top: `${top}px` });
   }
 
   private showBar(picked: Picked) {
@@ -152,7 +151,7 @@ export class SelectionTools {
     this.renderer.load();
     const panel = document.body.createDiv({ cls: 'eai-selpanel' });
     this.panel = panel;
-    panel.style.width = `${PANEL_WIDTH}px`;
+    panel.setCssStyles({ width: `${PANEL_WIDTH}px` });
     const head = panel.createDiv({ cls: 'eai-head eai-selhead' });
     head.title = '按住这里可以拖动';
     const grip = head.createSpan({ cls: 'eai-selgrip' });
@@ -201,8 +200,8 @@ export class SelectionTools {
     this.renderPicker();
     footer.createEl('button', { cls: 'mod-cta', text: '发送' }).onclick = send;
     if (this.spot) {
-      panel.style.width = `${this.spot.width}px`;
-      if (this.spot.height) panel.style.height = `${this.spot.height}px`;
+      panel.setCssStyles({ width: `${this.spot.width}px` });
+      if (this.spot.height) panel.setCssStyles({ height: `${this.spot.height}px` });
       this.moveTo(panel, this.spot.left, this.spot.top);
     } else {
       this.place(panel, picked.rect, PANEL_WIDTH, true);
@@ -222,8 +221,7 @@ export class SelectionTools {
     const width = panel.offsetWidth || PANEL_WIDTH;
     const x = Math.max(8 - width + 80, Math.min(window.innerWidth - 80, left));
     const y = Math.max(0, Math.min(window.innerHeight - 40, top));
-    panel.style.left = `${x}px`;
-    panel.style.top = `${y}px`;
+    panel.setCssStyles({ left: `${x}px`, top: `${y}px` });
   }
 
   private remember(panel: HTMLElement) {
