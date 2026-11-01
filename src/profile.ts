@@ -1,4 +1,4 @@
-import { normalizePath, Notice, TFile } from 'obsidian';
+import { Notice, TFile } from 'obsidian';
 import { message } from './backend';
 import {
   CONFIRMED,
@@ -185,7 +185,7 @@ export class ProfileManager {
     }
     const local = this.plugin.local;
     if (!local.chatReady()) {
-      new Notice('还没有设置好对话模型，请在插件设置里填写 API Key');
+      new Notice('还没有设置好对话模型，请在插件设置里填写 API key');
       return 0;
     }
     this.busy = true;

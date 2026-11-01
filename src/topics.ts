@@ -47,7 +47,7 @@ export class TopicMapper {
 
   private ready(): string {
     const local = this.plugin.local;
-    if (!local.chatReady()) return '还没有设置好对话模型，请在插件设置里填写 API Key';
+    if (!local.chatReady()) return '还没有设置好对话模型，请在插件设置里填写 API key';
     if (!local.engine.vectors.size) return '主题地图需要向量模型，请先在插件设置里选好向量模型并等它算完';
     const coverage = local.vectorCoverage();
     if (coverage < MIN_COVERAGE) return `向量还没算完（${Math.floor(coverage * 100)}%），算到 ${MIN_COVERAGE * 100}% 以上再试`;
@@ -178,7 +178,7 @@ export class TopicMapper {
       state = await this.build(false);
       if (!state) return null;
     }
-    const name = (id: number) => state!.topics.find((topic) => topic.id === id)?.name ?? `主题 ${id + 1}`;
+    const name = (id: number) => state.topics.find((topic) => topic.id === id)?.name ?? `主题 ${id + 1}`;
     const candidates = state.bridges.filter((bridge) => alive(bridge.a) && alive(bridge.b));
     if (!candidates.length) {
       new Notice('没有找到跨领域的连接');

@@ -136,7 +136,7 @@ export class SkillRunner {
     }
     const local = this.plugin.local;
     if (!local.chatReady()) {
-      new Notice('还没有设置好对话模型，请在插件设置里填写 API Key');
+      new Notice('还没有设置好对话模型，请在插件设置里填写 API key');
       return null;
     }
     if ((skill.scope === 'current' || skill.scope === 'cross') && !options.file) {

@@ -213,8 +213,8 @@ export default class AiNotesPlugin extends Plugin {
     new SkillModal(this.app, this, await this.skills.list(), options).open();
   }
 
-  async onunload() {
-    await this.local.stop();
+  onunload() {
+    void this.local.stop();
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -332,7 +332,7 @@ export default class AiNotesPlugin extends Plugin {
       await right.setViewState({ type, active: true });
       leaf = right;
     }
-    this.app.workspace.revealLeaf(leaf);
+    await this.app.workspace.revealLeaf(leaf);
     return leaf;
   }
 
@@ -343,7 +343,7 @@ export default class AiNotesPlugin extends Plugin {
   async openOrganize() {
     const existing = this.app.workspace.getLeavesOfType(ORGANIZE_VIEW)[0];
     if (existing) {
-      this.app.workspace.revealLeaf(existing);
+      await this.app.workspace.revealLeaf(existing);
       if (existing.view instanceof OrganizeView) await existing.view.refresh();
       return;
     }
@@ -353,8 +353,8 @@ export default class AiNotesPlugin extends Plugin {
   async openGraph() {
     const existing = this.app.workspace.getLeavesOfType(GRAPH_VIEW)[0];
     if (existing) {
-      this.app.workspace.revealLeaf(existing);
-      if (existing.view instanceof TopicGraphView) await existing.view.load();
+      await this.app.workspace.revealLeaf(existing);
+      if (existing.view instanceof TopicGraphView) await existing.view.reload();
       return;
     }
     await this.app.workspace.getLeaf(true).setViewState({ type: GRAPH_VIEW, active: true });

@@ -60,7 +60,7 @@ export async function ensureFolder(app: App, path: string) {
 export async function readState<T>(app: App, name: string, fallback: T): Promise<T> {
   const path = normalizePath(`${stateDir()}/${name}.json`);
   try {
-    if (await app.vault.adapter.exists(path)) return { ...fallback, ...JSON.parse(await app.vault.adapter.read(path)) };
+    if (await app.vault.adapter.exists(path)) return { ...fallback, ...(JSON.parse(await app.vault.adapter.read(path)) as Partial<T>) };
   } catch {
     return fallback;
   }

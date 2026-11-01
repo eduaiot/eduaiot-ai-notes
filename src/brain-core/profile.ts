@@ -118,12 +118,12 @@ export function parseSuggestions(text: string, max: number, limit = 8): ProfileS
   try {
     const list: unknown = JSON.parse(body.slice(start, end + 1));
     if (!Array.isArray(list)) return [];
-    return list
-      .filter((item) => typeof item?.text === 'string' && item.text.trim() && PROFILE_SECTIONS.includes(item?.section))
+    return (list as { text?: unknown; section?: unknown; evidence?: unknown }[])
+      .filter((item) => typeof item?.text === 'string' && item.text.trim() && typeof item.section === 'string' && PROFILE_SECTIONS.includes(item.section))
       .map((item) => ({
         section: item.section as string,
         text: (item.text as string).trim().replace(/\n/g, ' ').slice(0, 120),
-        evidence: Array.isArray(item.evidence) ? item.evidence.filter((n: unknown): n is number => typeof n === 'number' && n >= 1 && n <= max) : []
+        evidence: Array.isArray(item.evidence) ? (item.evidence as unknown[]).filter((n): n is number => typeof n === 'number' && n >= 1 && n <= max) : []
       }))
       .filter((item) => item.evidence.length)
       .slice(0, limit);

@@ -25,7 +25,7 @@ export class KeywordIndex {
     for (const [token, count] of tf) {
       length += count;
       let list = this.postings.get(token);
-      if (!list) this.postings.set(token, (list = new Map()));
+      if (!list) this.postings.set(token, (list = new Map<number, number>()));
       list.set(id, count);
     }
     this.terms.set(id, [...tf.keys()]);

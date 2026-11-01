@@ -52,8 +52,22 @@ export interface Message {
   content: string;
 }
 
-function failure(status: number, json: any): string {
-  const detail = String(json?.error?.message ?? json?.message ?? '').slice(0, 200);
+interface ErrorReply {
+  error?: { message?: string };
+  message?: string;
+}
+
+interface ChatReply {
+  choices?: { message?: { content?: unknown } }[];
+}
+
+interface EmbedReply {
+  data?: { index?: number; embedding?: unknown }[];
+}
+
+function failure(status: number, json: unknown): string {
+  const reply = json as ErrorReply | null;
+  const detail = String(reply?.error?.message ?? reply?.message ?? '').slice(0, 200);
   const suffix = detail ? `：${detail}` : '';
   if (status === 401 || status === 403) return 'API Key 不对或没有权限，请在设置里检查';
   if (status === 402) return '模型账户余额不足';
@@ -62,7 +76,7 @@ function failure(status: number, json: any): string {
   return `模型调用失败（${status}）${suffix}`;
 }
 
-async function post(http: Http, config: ModelConfig, path: string, body: object): Promise<any> {
+async function post(http: Http, config: ModelConfig, path: string, body: object): Promise<unknown> {
   if (!config.baseUrl.trim()) throw new ModelError('还没有填写模型的接口地址');
   if (!config.model.trim()) throw new ModelError('还没有填写模型名称');
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -73,9 +87,9 @@ async function post(http: Http, config: ModelConfig, path: string, body: object)
   } catch {
     throw new ModelError('连不上模型服务，请检查网络和接口地址');
   }
-  let json: any = null;
+  let json: unknown = null;
   try {
-    json = JSON.parse(response.text);
+    json = JSON.parse(response.text) as unknown;
   } catch {
     json = null;
   }
@@ -85,30 +99,31 @@ async function post(http: Http, config: ModelConfig, path: string, body: object)
 }
 
 export async function chat(http: Http, config: ModelConfig, messages: Message[], maxTokens = 2000): Promise<string> {
-  const json = await post(http, config, '/chat/completions', {
+  const json = (await post(http, config, '/chat/completions', {
     model: config.model.trim(),
     messages,
     temperature: 0.3,
     max_tokens: maxTokens,
     stream: false
-  });
-  const text = json?.choices?.[0]?.message?.content;
+  })) as ChatReply;
+  const text = json.choices?.[0]?.message?.content;
   if (typeof text !== 'string' || !text.trim()) throw new ModelError('模型没有返回内容');
   return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 }
 
 export async function embed(http: Http, config: ModelConfig, inputs: string[]): Promise<number[][]> {
-  const json = await post(http, config, '/embeddings', {
+  const json = (await post(http, config, '/embeddings', {
     model: config.model.trim(),
     input: inputs,
     ...(config.dimensions ? { dimensions: config.dimensions } : {})
-  });
-  const data = json?.data;
+  })) as EmbedReply;
+  const data = json.data;
   if (!Array.isArray(data) || data.length !== inputs.length) throw new ModelError('向量模型返回的数量不对');
   return [...data]
     .sort((a, b) => (a?.index ?? 0) - (b?.index ?? 0))
     .map((item) => {
-      if (!Array.isArray(item?.embedding) || !item.embedding.length) throw new ModelError('向量模型返回的内容无法识别');
-      return item.embedding as number[];
+      const vector = item?.embedding;
+      if (!Array.isArray(vector) || !vector.length) throw new ModelError('向量模型返回的内容无法识别');
+      return vector as number[];
     });
 }

@@ -96,7 +96,7 @@ export function renderAnswer(plugin: AiNotesPlugin, parent: HTMLElement, data: A
   void MarkdownRenderer.render(plugin.app, markdown, body, '', component).then(() => {
     body.querySelectorAll('.eai-quote, .eai-unverified').forEach((el, i) => {
       const item = quotes[i];
-      if (!item?.ok || !(el instanceof HTMLElement)) return;
+      if (!item?.ok || !el.instanceOf(HTMLElement)) return;
       el.addClass('is-clickable');
       el.title = '点击跳到原文这一行';
       el.onclick = () => jumpToQuote(plugin, data.sources, item.quote, item.cite);

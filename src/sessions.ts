@@ -38,8 +38,8 @@ export class SessionStore {
         try {
           const adapter = this.plugin.app.vault.adapter;
           if (await adapter.exists(this.path)) {
-            const value = JSON.parse(await adapter.read(this.path));
-            if (Array.isArray(value)) this.list = value.filter((item) => item && typeof item.id === 'string' && Array.isArray(item.entries));
+            const value = JSON.parse(await adapter.read(this.path)) as unknown;
+            if (Array.isArray(value)) this.list = (value as typeof this.list).filter((item) => item && typeof item.id === 'string' && Array.isArray(item.entries));
           }
         } catch {
           this.list = [];

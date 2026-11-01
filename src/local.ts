@@ -1,8 +1,8 @@
 import { normalizePath, TAbstractFile, TFile } from 'obsidian';
 import { message, type AskResult, type Backend } from './backend';
-import { askMessages, chat, embed, ModelError, NoteEngine, normalize, provider, type Hit, type Message, type PinnedNote, type Turn, type VectorMeta } from './core';
+import { askMessages, chat, embed, ModelError, NoteEngine, normalize, type Hit, type Message, type PinnedNote, type Turn, type VectorMeta } from './core';
 import type AiNotesPlugin from './main';
-import { embedConfig, embedId, modelConfig, modelLabel, modelReady, resolveModel, type ModelUse } from './settings';
+import { embedConfig, embedId, modelConfig, modelLabel, modelReady, resolveModel } from './settings';
 
 const BATCH = 10;
 const SAVE_EVERY = 20;
@@ -256,15 +256,15 @@ export class LocalBackend implements Backend {
     return this.engine.related(path, limit);
   }
 
-  chatReady(use: ModelUse | string = 'task'): boolean {
+  chatReady(use: string = 'task'): boolean {
     const settings = this.plugin.settings;
     return modelReady(settings, resolveModel(settings, use));
   }
 
-  async complete(messages: Message[], maxTokens = 2000, use: ModelUse | string = 'task'): Promise<string> {
+  async complete(messages: Message[], maxTokens = 2000, use: string = 'task'): Promise<string> {
     const settings = this.plugin.settings;
     const entry = resolveModel(settings, use);
-    if (!modelReady(settings, entry)) throw new ModelError(`模型「${entry ? modelLabel(entry) : '未设置'}」还没有设置好（API Key、接口地址或模型名称），请在插件设置里填写`);
+    if (!modelReady(settings, entry)) throw new ModelError(`模型「${entry ? modelLabel(entry) : '未设置'}」还没有设置好（API key、接口地址或模型名称），请在插件设置里填写`);
     return chat(this.plugin.http, modelConfig(settings, entry), messages, maxTokens);
   }
 
@@ -275,7 +275,7 @@ export class LocalBackend implements Backend {
   async ask(question: string, history: Turn[], pin: PinnedNote | null, model?: string): Promise<AskResult> {
     const use = model || 'chat';
     const entry = resolveModel(this.plugin.settings, use);
-    if (!this.chatReady(use)) throw new ModelError(`模型「${modelLabel(entry)}」还没有设置好（API Key、接口地址或模型名称），请在插件设置里填写`);
+    if (!this.chatReady(use)) throw new ModelError(`模型「${modelLabel(entry)}」还没有设置好（API key、接口地址或模型名称），请在插件设置里填写`);
     await this.start();
     const query = `${question}\n${history.length ? history[history.length - 1].q : ''}`;
     const groups = this.engine.context(query, await this.queryVector(query), pin);

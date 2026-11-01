@@ -128,7 +128,7 @@ export class PickModal extends Modal {
       const expanded = this.expanded.has(child.path);
       const notes = this.notesIn(child);
       const head = parent.createDiv({ cls: 'eai-pick-folder' });
-      head.style.paddingLeft = `${depth * 14 + 4}px`;
+      head.setCssStyles({ paddingLeft: `${depth * 14 + 4}px` });
       head.createSpan({ text: `${expanded ? '▾' : '▸'} 📁 ${child.name}` });
       if (notes.length) head.createSpan({ cls: 'eai-meta', text: ` ${notes.length} 篇` });
       head.onclick = () => {
@@ -148,7 +148,7 @@ export class PickModal extends Modal {
       if (!expanded) continue;
       this.renderFolder(child, parent, depth + 1);
       const box = parent.createDiv();
-      box.style.paddingLeft = `${(depth + 1) * 14}px`;
+      box.setCssStyles({ paddingLeft: `${(depth + 1) * 14}px` });
       for (const note of notes.sort((a, b) => b.stat.mtime - a.stat.mtime)) this.row(box, note.path);
     }
     if (depth === 0) {

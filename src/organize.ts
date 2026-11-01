@@ -186,7 +186,7 @@ export class Organizer {
     const cache = this.app.metadataCache.getFileCache(file);
     if (cache?.embeds?.length || cache?.links?.length || cache?.frontmatterLinks?.length) return false;
     const media = /https?:\/\/|\.(png|jpe?g|gif|webp|svg|bmp|heic|mp4|mov|m4v|webm|mp3|m4a|wav|ogg|flac|pdf)\b/i;
-    const values = Object.values(cache?.frontmatter ?? {}).flatMap((value) => (Array.isArray(value) ? value : [value]));
+    const values = Object.values((cache?.frontmatter ?? {}) as Record<string, unknown>).flatMap((value): unknown[] => (Array.isArray(value) ? value : [value]));
     if (values.some((value) => typeof value === 'string' && media.test(value))) return false;
     const body = parseNote(await this.app.vault.cachedRead(file)).body.replace(/<!--[\s\S]*?-->|%%[\s\S]*?%%/g, '');
     if (/!\[[^\]]*\]\([^)]+\)|<(img|video|audio|iframe|embed|object)\b/i.test(body)) return false;
@@ -207,7 +207,7 @@ export class Organizer {
   async generate(paths: string[], progress: (done: number, total: number) => void, scope = ALL): Promise<number> {
     await this.load();
     const local = this.plugin.local;
-    if (!local.chatReady()) throw new Error('还没有设置好对话模型，请在插件设置里填写 API Key');
+    if (!local.chatReady()) throw new Error('还没有设置好对话模型，请在插件设置里填写 API key');
     await local.start();
     const engine = local.engine;
     const queue = [...new Set(paths)].filter((path) => engine.has(path)).slice(0, RUN_LIMIT);
@@ -221,13 +221,13 @@ export class Organizer {
         progress(i, queue.length);
         const batch = queue.slice(i, i + BATCH);
         const inputs: OrganizeInput[] = batch.map((path, n) => {
-          const file = this.app.vault.getAbstractFileByPath(path) as TFile;
+          const file = this.app.vault.getFileByPath(path);
           const group = engine.groups([path], null, TEXT)[0];
           return {
             n: n + 1,
-            title: file.basename,
+            title: file?.basename ?? engine.title(path),
             folder: folderOf(path),
-            tags: this.tagsOf(file),
+            tags: file ? this.tagsOf(file) : [],
             text: (group?.texts.join('\n\n') ?? '').slice(0, TEXT),
             related: engine.related(path, RELATED).map((hit, k) => ({ key: String.fromCharCode(97 + k), path: hit.path, title: hit.title }))
           };
@@ -274,7 +274,7 @@ export class Organizer {
     if (!(file instanceof TFile)) throw new Error('找不到这篇笔记，可能已经删除或改名');
     const { use } = suggestion;
     if ((use.summary && suggestion.summary) || (use.tags && suggestion.tags.length)) {
-      await this.app.fileManager.processFrontMatter(file, (front) => {
+      await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
         if (use.summary && suggestion.summary) front.summary = suggestion.summary;
         if (use.tags && suggestion.tags.length) {
           const raw = front.tags;
@@ -299,13 +299,13 @@ export class Organizer {
       let next = target;
       for (let i = 2; this.app.vault.getAbstractFileByPath(next); i++) next = normalizePath(`${folder ? `${folder}/` : ''}${name}-${i}.md`);
       await this.app.fileManager.renameFile(file, next);
-      file = this.app.vault.getAbstractFileByPath(next) as TFile;
+      file = this.app.vault.getFileByPath(next) ?? file;
       this.record('move', before, next);
     }
     this.state.suggestions = this.state.suggestions.filter((item) => item !== suggestion && item.path !== suggestion.path);
-    this.state.done = [...this.state.done.filter((path) => path !== suggestion.path), (file as TFile).path].slice(-5000);
+    this.state.done = [...this.state.done.filter((path) => path !== suggestion.path), file.path].slice(-5000);
     await this.save();
-    return (file as TFile).path;
+    return file.path;
   }
 
   async skip(suggestion: Suggestion) {
@@ -332,9 +332,7 @@ export class Organizer {
 
   private async moveToTrash(file: TFile) {
     this.record('trash', file.path, '');
-    const manager = this.app.fileManager as unknown as { trashFile?: (file: TFile) => Promise<void> };
-    if (manager.trashFile) await manager.trashFile(file);
-    else await this.app.vault.trash(file, true);
+    await this.app.fileManager.trashFile(file);
   }
 
   async trash(path: string) {
@@ -400,7 +398,7 @@ export class Organizer {
     }
     if (parts.length) await this.app.vault.process(keeper, (text) => `${text.replace(/\s*$/, '')}\n\n${parts.join('\n\n')}\n`);
     if (tags.size) {
-      await this.app.fileManager.processFrontMatter(keeper, (front) => {
+      await this.app.fileManager.processFrontMatter(keeper, (front: Record<string, unknown>) => {
         const raw = front.tags;
         const current: string[] = Array.isArray(raw) ? raw.map(String) : typeof raw === 'string' ? raw.split(/[,\s]+/).filter(Boolean) : [];
         front.tags = [...new Set([...current.map((tag) => tag.replace(/^#/, '')), ...tags])];
@@ -475,7 +473,7 @@ export class Organizer {
   async generatePlan(scope: string): Promise<PlanFolder[]> {
     await this.load();
     const local = this.plugin.local;
-    if (!local.chatReady()) throw new Error('还没有设置好对话模型，请在插件设置里填写 API Key');
+    if (!local.chatReady()) throw new Error('还没有设置好对话模型，请在插件设置里填写 API key');
     await local.start();
     const base = scope === ALL || scope === ROOT ? '' : scope;
     const inScope = (path: string) => !base || path === base || path.startsWith(`${base}/`);
@@ -508,7 +506,7 @@ export class Organizer {
   async classify(progress: (done: number, total: number) => void): Promise<{ moved: number; total: number }> {
     await this.load();
     const local = this.plugin.local;
-    if (!local.chatReady()) throw new Error('还没有设置好对话模型，请在插件设置里填写 API Key');
+    if (!local.chatReady()) throw new Error('还没有设置好对话模型，请在插件设置里填写 API key');
     await local.start();
     const plan = this.state.plan ? sanitizePlan(this.state.plan) : [];
     if (!plan.length) throw new Error('还没有分类方案');
@@ -522,8 +520,8 @@ export class Organizer {
         progress(i, paths.length);
         const batch = paths.slice(i, i + CLASSIFY_BATCH);
         const notes = batch.map((path, n) => {
-          const file = this.app.vault.getAbstractFileByPath(path) as TFile;
-          const summary = this.app.metadataCache.getFileCache(file)?.frontmatter?.summary;
+          const file = this.app.vault.getFileByPath(path);
+          const summary = (file ? this.app.metadataCache.getFileCache(file)?.frontmatter?.summary : undefined) as unknown;
           const body = engine.groups([path], null, CLASSIFY_TEXT)[0]?.texts.join('\n') ?? '';
           return { n: n + 1, title: engine.title(path), text: `${typeof summary === 'string' ? `摘要：${summary}\n` : ''}${body}`.slice(0, CLASSIFY_TEXT) };
         });
@@ -575,7 +573,7 @@ export class Organizer {
   async removeFolders(paths: string[]) {
     for (const path of [...paths].sort((a, b) => b.length - a.length)) {
       const folder = this.app.vault.getAbstractFileByPath(path);
-      if (folder instanceof TFolder && !folder.children.length) await this.app.vault.delete(folder, true);
+      if (folder instanceof TFolder && !folder.children.length) await this.app.fileManager.trashFile(folder);
     }
   }
 
@@ -653,7 +651,7 @@ export class Organizer {
           for (const file of moved) this.record('move', file.path, `${next}${file.path.slice(child.path.length)}`);
           changes++;
         }
-        if (!source.children.length && !protectedPath(source.path)) await this.app.vault.delete(source, true);
+        if (!source.children.length && !protectedPath(source.path)) await this.app.fileManager.trashFile(source);
       }
     }
     this.state.plan = null;
