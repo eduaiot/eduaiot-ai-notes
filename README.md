@@ -19,7 +19,8 @@ Put your notes to work. Ask questions with sources from your own vault, find not
 ## Requirements
 
 - Desktop Obsidian 1.4.0 or later.
-- **No account or payment is required.** AI features need a model: an API key from a model provider you choose, or a local model via Ollama. Semantic search optionally uses an embedding model (for example `bge-m3` in Ollama).
+- **No account or payment is required for any plugin feature.** The skill market also lists some members-only skill packs, which require a paid EduAIoT membership (bought on the website); free packs and all built-in skills need no account.
+- AI features need a model: an API key from a model provider you choose, or a local model via Ollama. Semantic search optionally uses an embedding model (for example `bge-m3` in Ollama).
 
 ## Getting started
 
@@ -34,7 +35,7 @@ The plugin works locally. Your notes, the search index, conversations and logs s
 
 1. **The model providers you configure** (for example DeepSeek, Qwen, Zhipu, Agnes). When you use an AI feature, the relevant note excerpts and your question are sent to that provider. Their privacy policies apply. With Ollama everything stays on your computer.
 2. **The EduAIoT server** (`https://wechat-obsidian.eduaiot.com` by default), only when you open the skill market: the plugin downloads the skill pack list and the packs you choose to install. No notes are uploaded.
-3. **Optional: the EduAIoT desktop app** on the same computer, through a local connection, if you choose to connect it.
+3. **Optional: the EduAIoT desktop app** on the same computer, through a local connection (`127.0.0.1`), if you choose to connect it. To find the app, the plugin reads one file outside your vault: `~/.dsh-eduaiot/edu-obsidian-bridge.json` (or the path you set), which contains the local port and access token written by the desktop app. Nothing else outside the vault is read.
 
 Your API keys are stored in this vault's plugin settings. The plugin contains no telemetry and no ads.
 
@@ -75,7 +76,8 @@ Download `main.js`, `manifest.json` and `styles.css` from the [latest release](.
 ### 使用前提
 
 - 电脑版 Obsidian 1.4.0 及以上。
-- **不需要账号，不收费。** AI 功能需要一个模型：自己申请的 API Key，或者本机 Ollama 里的模型。按意思搜索可以另外配置向量模型，例如 Ollama 的 `bge-m3`。
+- **插件的全部功能都不需要账号，不收费。** 技能市场里另有部分会员专属技能包，需要在官网开通付费的易度会员；免费技能包和预置技能不需要账号。
+- AI 功能需要一个模型：自己申请的 API Key，或者本机 Ollama 里的模型。按意思搜索可以另外配置向量模型，例如 Ollama 的 `bge-m3`。
 
 ### 开始使用
 
@@ -90,7 +92,7 @@ Download `main.js`, `manifest.json` and `styles.css` from the [latest release](.
 
 1. **你配置的模型服务商**（例如 DeepSeek、通义千问、智谱、Agnes）：使用 AI 功能时，会把和这次任务相关的笔记片段和你的问题发给它，按它们的隐私政策处理。用本机 Ollama 时，数据不出你的电脑。
 2. **易度服务器**（默认 `https://wechat-obsidian.eduaiot.com`）：只在打开「技能市场」时，下载技能包目录和你选择安装的技能包，不会上传笔记。
-3. **可选：本机的 EduAIoT 桌面版**：只有你选择连接时，通过本机内部连接通信。
+3. **可选：本机的 EduAIoT 桌面版**：只有你选择连接时，通过本机内部连接（`127.0.0.1`）通信。为了找到桌面版，插件会读取笔记库外的一个文件：`~/.dsh-eduaiot/edu-obsidian-bridge.json`（或你在设置里指定的路径），里面是桌面版写入的本机端口和访问令牌。除此之外不读取笔记库外的任何文件。
 
 API Key 只保存在当前笔记库的插件设置里。插件没有任何统计、埋点或广告。
 
