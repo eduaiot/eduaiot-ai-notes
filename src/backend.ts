@@ -6,11 +6,20 @@ export interface AskResult {
   model?: string;
 }
 
+export interface Refs {
+  files: string[];
+  folders: string[];
+}
+
+export function hasRefs(refs?: Refs): boolean {
+  return Boolean(refs && (refs.files.length || refs.folders.length));
+}
+
 export interface Backend {
   readonly kind: 'local' | 'desktop';
   search(query: string, limit: number): Promise<Hit[]>;
   related(path: string, limit: number): Promise<Hit[]>;
-  ask(question: string, history: Turn[], pin: PinnedNote | null, model?: string): Promise<AskResult>;
+  ask(question: string, history: Turn[], pin: PinnedNote | null, model?: string, images?: string[], refs?: Refs): Promise<AskResult>;
 }
 
 export function message(error: unknown): string {

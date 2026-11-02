@@ -70,6 +70,12 @@ export interface ContextGroup {
   source: Source;
   texts: string[];
   current: boolean;
+  picked?: boolean;
+}
+
+export interface Scope {
+  refs?: PinnedNote[];
+  folders?: string[];
 }
 
 function snippet(text: string, query: string): string {
@@ -238,21 +244,25 @@ export class NoteEngine {
     this.vectors.retain(new Set([...this.chunks.values()].map((chunk) => chunk.key)));
   }
 
-  private vectorSearch(query: Float32Array, limit: number, skip?: string): Scored[] {
+  private vectorSearch(query: Float32Array, limit: number, skip?: string, allow?: (path: string) => boolean): Scored[] {
     const out: Scored[] = [];
     for (const chunk of this.chunks.values()) {
-      if (chunk.path === skip) continue;
+      if (chunk.path === skip || (allow && !allow(chunk.path))) continue;
       const score = this.vectors.score(query, chunk.key);
       if (score !== null) out.push({ id: chunk.id, score });
     }
     return out.sort((a, b) => b.score - a.score).slice(0, limit);
   }
 
-  private fuse(query: string, vector: Float32Array | null, skip?: string): ChunkRecord[] {
+  private fuse(query: string, vector: Float32Array | null, skip?: string, allow?: (path: string) => boolean): ChunkRecord[] {
     const scores = new Map<number, number>();
     const add = (list: Scored[]) => list.forEach((item, rank) => scores.set(item.id, (scores.get(item.id) ?? 0) + 1 / (RRF + rank + 1)));
-    add(this.keyword.search(query, POOL).filter((item) => this.chunks.get(item.id)?.path !== skip));
-    if (vector && this.vectors.size) add(this.vectorSearch(vector, POOL, skip));
+    const keep = (id: number) => {
+      const path = this.chunks.get(id)?.path;
+      return path !== undefined && path !== skip && (!allow || allow(path));
+    };
+    add(this.keyword.search(query, allow ? this.chunks.size : POOL).filter((item) => keep(item.id)).slice(0, POOL));
+    if (vector && this.vectors.size) add(this.vectorSearch(vector, POOL, skip, allow));
     return [...scores]
       .sort((a, b) => b[1] - a[1])
       .map(([id]) => this.chunks.get(id))
@@ -302,14 +312,14 @@ export class NoteEngine {
     return this.hits(this.fuse(text, this.noteVector(path), path), text, limit);
   }
 
-  private pinned(pin: PinnedNote, query: string, vector: Float32Array | null): ContextGroup | null {
+  private pinned(pin: PinnedNote, query: string, vector: Float32Array | null, limit = PIN_BUDGET): ContextGroup | null {
     const { frontmatter, body, bodyLine } = parseNote(pin.text);
     const title = noteTitle(frontmatter.title, pin.path);
     const chunks = chunkNote(body, bodyLine);
     const head = [frontmatter.title, frontmatter.description, frontmatter.summary].filter(Boolean).join('\n');
     if (!chunks.length && !head) return null;
     let chosen = chunks;
-    if (chunks.reduce((sum, chunk) => sum + chunk.text.length, 0) > PIN_BUDGET) {
+    if (chunks.reduce((sum, chunk) => sum + chunk.text.length, 0) > limit) {
       const terms = new Set(tokenize(query));
       const score = (chunk: Chunk) => {
         const similar = vector ? this.vectors.score(vector, hash(embedText(title, chunk))) : null;
@@ -321,7 +331,7 @@ export class NoteEngine {
       const picked: typeof ranked = [];
       let used = 0;
       for (const item of ranked) {
-        if (used + item.chunk.text.length > PIN_BUDGET) continue;
+        if (used + item.chunk.text.length > limit) continue;
         picked.push(item);
         used += item.chunk.text.length;
       }
@@ -332,21 +342,38 @@ export class NoteEngine {
     return { source: { n: 1, path: pin.path, title, heading: '' }, texts, current: true };
   }
 
-  context(query: string, vector: Float32Array | null, pin: PinnedNote | null = null, notes = 6, perNote = 2, budget = 9000): ContextGroup[] {
+  context(query: string, vector: Float32Array | null, pin: PinnedNote | null = null, notes = 6, perNote = 2, budget = 9000, scope: Scope = {}): ContextGroup[] {
     const groups = new Map<string, ContextGroup>();
     let used = 0;
-    const current = pin ? this.pinned(pin, query, vector) : null;
+    const refs = (scope.refs ?? []).filter((ref) => ref.path !== pin?.path);
+    const share = Math.max(1500, Math.floor((PIN_BUDGET * 2) / Math.max(1, refs.length + (pin ? 1 : 0))));
+    const current = pin ? this.pinned(pin, query, vector, refs.length ? share : PIN_BUDGET) : null;
     if (current) groups.set(current.source.path, current);
-    for (const chunk of this.fuse(query, vector, pin?.path).slice(0, POOL)) {
+    for (const ref of refs) {
+      const group = this.pinned(ref, query, vector, share);
+      if (group) groups.set(ref.path, { ...group, current: false, picked: true });
+    }
+    const folders = (scope.folders ?? []).map((folder) => folder.replace(/\/+$/, ''));
+    const allow = folders.length ? (path: string) => folders.some((folder) => !folder || path.startsWith(`${folder}/`)) : undefined;
+    const fixed = new Set(groups.keys());
+    const limit = notes + refs.length;
+    const take = (chunk: ChunkRecord) => {
+      if (fixed.has(chunk.path)) return;
       let group = groups.get(chunk.path);
       if (!group) {
-        if (groups.size >= notes) continue;
+        if (groups.size >= limit) return;
         group = { source: { n: groups.size + 1, path: chunk.path, title: this.title(chunk.path), heading: chunk.heading, line: chunk.line }, texts: [], current: false };
         groups.set(chunk.path, group);
       }
-      if (group.current || group.texts.length >= perNote || used + chunk.text.length > budget) continue;
+      if (group.texts.length >= perNote || used + chunk.text.length > budget) return;
       group.texts.push(labeled(chunk));
       used += chunk.text.length;
+    };
+    for (const chunk of this.fuse(query, vector, pin?.path, allow).slice(0, POOL)) take(chunk);
+    if (allow && groups.size === fixed.size) {
+      for (const [path, note] of this.notes) {
+        if (allow(path) && note.ids.length) take(this.chunks.get(note.ids[0])!);
+      }
     }
     return [...groups.values()]
       .filter((group) => group.texts.length)

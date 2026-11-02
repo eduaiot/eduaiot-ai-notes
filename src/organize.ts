@@ -12,6 +12,7 @@ const CLASSIFY_BATCH = 10;
 const CLASSIFY_TEXT = 700;
 export const ALL = '*';
 export const ROOT = '/';
+export const UNKNOWN = '未知';
 
 const LINKS_SECTION = '相关笔记';
 
@@ -511,6 +512,7 @@ export class Organizer {
     const plan = this.state.plan ? sanitizePlan(this.state.plan) : [];
     if (!plan.length) throw new Error('还没有分类方案');
     const scope = this.state.planScope || ALL;
+    const unknown = scope === ALL || scope === ROOT ? UNKNOWN : `${scope}/${UNKNOWN}`;
     const paths = this.notesIn(scope).slice(0, RUN_LIMIT);
     const engine = local.engine;
     let moved = 0;
@@ -531,7 +533,8 @@ export class Organizer {
           const file = this.app.vault.getAbstractFileByPath(path);
           if (pick === undefined || !(file instanceof TFile)) return;
           const current = folderOf(path);
-          const target = pick ? plan[pick - 1].path : current;
+          const placed = plan.some((folder) => current === folder.path || current.startsWith(`${folder.path}/`));
+          const target = pick ? plan[pick - 1].path : placed || current === unknown ? current : unknown;
           const existing = this.state.suggestions.find((item) => item.path === path);
           if (existing) {
             existing.folder = target;

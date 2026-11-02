@@ -1,12 +1,40 @@
-import { Component, ItemView, Menu, Notice, WorkspaceLeaf, normalizePath } from 'obsidian';
-import { message } from './backend';
+import { Component, FuzzySuggestModal, ItemView, Menu, Notice, TFile, TFolder, WorkspaceLeaf, normalizePath, type App, type TAbstractFile } from 'obsidian';
+import { hasRefs, message, type Refs } from './backend';
 import { INFER, verifyAnswer, type PinnedNote, type Source, type Turn } from './core';
 import { modelPicker, renderAnswer, retryButtons, shownSources } from './answer';
 import type AiNotesPlugin from './main';
 import { newSession, type Session } from './sessions';
+import { modelLabel, visionModel } from './settings';
 import { ensureFolder, inRoot, safeName, sourceLink, sourceTexts, stamp, today } from './store';
 
 export const ASK_VIEW = 'eduaiot-ai-notes-ask';
+const MAX_IMAGES = 4;
+const MAX_SIDE = 1600;
+const IMAGE_QUESTION = '看看这张图片，结合我的笔记说说。';
+const MAX_REFS = 8;
+
+class RefSuggest extends FuzzySuggestModal<TAbstractFile> {
+  constructor(app: App, private readonly pick: (item: TAbstractFile) => void) {
+    super(app);
+    this.setPlaceholder('搜索笔记或文件夹，回车选中');
+  }
+
+  getItems() {
+    const folders = this.app.vault.getAllLoadedFiles().filter((item): item is TFolder => item instanceof TFolder && !item.isRoot());
+    return [...folders, ...this.app.vault.getMarkdownFiles()];
+  }
+
+  getItemText(item: TAbstractFile) {
+    return `${item instanceof TFolder ? '📁' : '📄'} ${item.path}`;
+  }
+
+  onChooseItem(item: TAbstractFile) {
+    this.pick(item);
+  }
+}
+
+const noRefs = (): Refs => ({ files: [], folders: [] });
+const baseName = (path: string) => path.split('/').pop()?.replace(/\.md$/, '') ?? path;
 
 interface Entry {
   q: string;
@@ -14,6 +42,9 @@ interface Entry {
   current: string;
   model?: string;
   modelId?: string;
+  images?: string[];
+  imageCount?: number;
+  refs?: Refs;
   sources: Source[];
   texts: Map<number, string>;
   error: string;
@@ -29,6 +60,23 @@ function day(time: number) {
   return `${date.getMonth() + 1}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+async function shrink(file: Blob): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = activeDocument.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('canvas');
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL('image/jpeg', 0.9);
+}
+
+const isImage = (file: File) => file.type.startsWith('image/');
+
 export class AskView extends ItemView {
   private entries: Entry[] = [];
   private session: Session = newSession();
@@ -38,6 +86,9 @@ export class AskView extends ItemView {
   private modeEl!: HTMLElement;
   private currentEl!: HTMLElement;
   private useCurrent = true;
+  private images: string[] = [];
+  private refs: Refs = noRefs();
+  private attachEl!: HTMLElement;
   private renderer = new Component();
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: AiNotesPlugin) {
@@ -76,9 +127,10 @@ export class AskView extends ItemView {
     this.messagesEl = root.createDiv({ cls: 'eai-messages' });
     const form = root.createDiv({ cls: 'eai-form' });
     this.currentEl = form.createEl('label', { cls: 'eai-current' });
+    this.attachEl = form.createDiv({ cls: 'eai-attachments' });
     this.input = form.createEl('textarea', {
       cls: 'eai-textarea',
-      attr: { placeholder: '问点什么，比如：我存过哪些讲短视频脚本的内容？（Enter 发送，Shift+Enter 换行）' }
+      attr: { placeholder: '问点什么，比如：我存过哪些讲短视频脚本的内容？（Enter 发送，Shift+Enter 换行，可以直接粘贴截图）' }
     });
     this.input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -86,12 +138,44 @@ export class AskView extends ItemView {
         void this.send();
       }
     });
+    this.input.addEventListener('input', (event) => {
+      const at = this.input.selectionStart;
+      const typed = (event as Partial<InputEvent>).data;
+      if ((typed !== '@' && typed !== '＠') || this.input.value[at - 1] !== typed) return;
+      this.chooseRef(at - 1);
+    });
+    this.input.addEventListener('paste', (event) => {
+      const files = Array.from(event.clipboardData?.files ?? []).filter(isImage);
+      if (!files.length) return;
+      event.preventDefault();
+      void this.addImages(files);
+    });
+    form.addEventListener('dragover', (event) => {
+      if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
+    });
+    form.addEventListener('drop', (event) => {
+      const files = Array.from(event.dataTransfer?.files ?? []).filter(isImage);
+      if (!files.length) return;
+      event.preventDefault();
+      void this.addImages(files);
+    });
     const footer = form.createDiv({ cls: 'eai-form-footer' });
     this.modeEl = footer.createDiv({ cls: 'eai-model-slot' });
+    const picker = footer.createEl('input', { type: 'file', attr: { accept: 'image/*', multiple: '' } });
+    picker.hidden = true;
+    picker.onchange = () => {
+      void this.addImages(Array.from(picker.files ?? []).filter(isImage));
+      picker.value = '';
+    };
+    const mention = footer.createEl('button', { text: '@', attr: { 'aria-label': '指定笔记或文件夹（也可以在输入框里输入 @）' } });
+    mention.onclick = () => this.chooseRef(-1);
+    const attach = footer.createEl('button', { text: '图片', attr: { 'aria-label': '添加图片，也可以直接粘贴截图或拖进来' } });
+    attach.onclick = () => picker.click();
     this.sendButton = footer.createEl('button', { cls: 'mod-cta', text: '发送' });
     this.sendButton.onclick = () => this.send();
     this.renderer.load();
     this.updateMode();
+    this.renderAttachments();
     this.render();
     await this.plugin.sessions.load();
     const last = this.plugin.sessions.all()[0];
@@ -159,7 +243,7 @@ export class AskView extends ItemView {
     const session = this.session;
     session.entries = this.entries
       .filter((entry) => !entry.pending)
-      .map(({ q, a, current, sources, error, model, modelId }) => ({ q, a, current, sources, error, model, modelId }));
+      .map(({ q, a, current, sources, error, model, modelId, imageCount, refs }) => ({ q, a, current, sources, error, model, modelId, imageCount, refs }));
     if (!session.entries.length) return;
     session.title = session.title || session.entries[0].q.split('\n')[0].slice(0, 40);
     session.updated = Date.now();
@@ -195,25 +279,95 @@ export class AskView extends ItemView {
     return { path: file.path, text: await this.app.vault.cachedRead(file) };
   }
 
+  private async addImages(files: File[]) {
+    for (const file of files) {
+      if (this.images.length >= MAX_IMAGES) {
+        new Notice(`一次最多发 ${MAX_IMAGES} 张图片`);
+        break;
+      }
+      try {
+        this.images.push(await shrink(file));
+      } catch {
+        new Notice('这张图片读不出来');
+      }
+    }
+    this.renderAttachments();
+    this.input.focus();
+  }
+
+  private chooseRef(at: number) {
+    new RefSuggest(this.app, (item) => {
+      if (at >= 0 && /[@＠]/.test(this.input.value[at] ?? '')) this.input.value = this.input.value.slice(0, at) + this.input.value.slice(at + 1);
+      const list = item instanceof TFolder ? this.refs.folders : this.refs.files;
+      if (this.refs.files.length + this.refs.folders.length >= MAX_REFS) new Notice(`一次最多指定 ${MAX_REFS} 个笔记或文件夹`);
+      else if (!list.includes(item.path)) list.push(item.path);
+      this.renderAttachments();
+      this.input.focus();
+    }).open();
+  }
+
+  private renderAttachments() {
+    this.attachEl.empty();
+    this.attachEl.toggleClass('is-empty', !this.images.length && !hasRefs(this.refs));
+    for (const [kind, icon] of [['folders', '📁'], ['files', '📄']] as const) {
+      for (const path of this.refs[kind]) {
+        const chip = this.attachEl.createDiv({ cls: 'eai-ref', attr: { title: path } });
+        chip.createSpan({ text: `${icon} ${baseName(path)}` });
+        const remove = chip.createEl('button', { text: '×', attr: { 'aria-label': '移除' } });
+        remove.onclick = () => {
+          this.refs[kind] = this.refs[kind].filter((item) => item !== path);
+          this.renderAttachments();
+        };
+      }
+    }
+    this.images.forEach((url, i) => {
+      const item = this.attachEl.createDiv({ cls: 'eai-attachment' });
+      item.createEl('img', { attr: { src: url, alt: `图片 ${i + 1}` } });
+      const remove = item.createEl('button', { text: '×', attr: { 'aria-label': '移除这张图片' } });
+      remove.onclick = () => {
+        this.images.splice(i, 1);
+        this.renderAttachments();
+      };
+    });
+  }
+
+  private pickModel(modelId: string, images: string[]): string | null {
+    if (!images.length) return modelId;
+    const chosen = visionModel(this.plugin.settings, modelId);
+    if (!chosen) {
+      new Notice('现在设置的模型都不能看图片。请在插件设置里加一个能看图的模型（比如通义千问 qwen-vl-max、智谱 glm-4v-flash），并打开「支持图片」', 10000);
+      return null;
+    }
+    if (chosen.id !== modelId) new Notice(`这轮带了图片，改用「${modelLabel(chosen)}」回答`);
+    return chosen.id;
+  }
+
   focusInput(text?: string) {
     if (text) this.input.value = text;
     this.input.focus();
   }
 
   private async send() {
-    const question = this.input.value.trim();
+    const images = [...this.images];
+    const question = this.input.value.trim() || (images.length ? IMAGE_QUESTION : '');
     if (!question || this.entries.some((entry) => entry.pending)) return;
+    const modelId = this.pickModel(this.session.model || this.plugin.settings.chatModel, images);
+    if (!modelId) return;
+    const refs = this.refs;
     this.input.value = '';
+    this.images = [];
+    this.refs = noRefs();
+    this.renderAttachments();
     const history: Turn[] = this.entries.filter((entry) => !entry.pending && !entry.error).map((entry) => ({ q: entry.q, a: entry.a }));
-    const modelId = this.session.model || this.plugin.settings.chatModel;
-    const entry: Entry = { q: question, a: '', current: '', modelId, sources: [], texts: new Map(), error: '', pending: true };
+    const entry: Entry = { q: question, a: '', current: '', modelId, images, imageCount: images.length || undefined, refs: hasRefs(refs) ? refs : undefined, sources: [], texts: new Map(), error: '', pending: true };
     this.entries.push(entry);
     this.render();
     try {
       const pin = await this.pinned();
       entry.current = pin ? this.plugin.currentFile()?.basename ?? '' : '';
       this.render();
-      const result = await this.plugin.backend.ask(question, history, pin, modelId);
+      const backend = images.length || hasRefs(refs) ? this.plugin.local : this.plugin.backend;
+      const result = await backend.ask(question, history, pin, modelId, images, refs);
       entry.model = result.model;
       entry.a = result.answer;
       entry.sources = result.sources;
@@ -230,8 +384,11 @@ export class AskView extends ItemView {
     return sourceTexts(this.app, sources);
   }
 
-  private async retry(entry: Entry, modelId: string) {
+  private async retry(entry: Entry, picked: string) {
     if (this.entries.some((item) => item.pending)) return;
+    const images = entry.images ?? [];
+    const modelId = this.pickModel(picked, images);
+    if (!modelId) return;
     this.session.model = modelId === this.plugin.settings.chatModel ? undefined : modelId;
     this.updateMode();
     const index = this.entries.indexOf(entry);
@@ -242,7 +399,9 @@ export class AskView extends ItemView {
     this.render();
     try {
       const pin = await this.pinned();
-      const result = await this.plugin.backend.ask(entry.q, history, pin, modelId);
+      const refs = entry.refs ?? noRefs();
+      const backend = images.length || hasRefs(refs) ? this.plugin.local : this.plugin.backend;
+      const result = await backend.ask(entry.q, history, pin, modelId, images, refs);
       entry.a = result.answer;
       entry.model = result.model;
       entry.sources = result.sources;
@@ -277,7 +436,13 @@ export class AskView extends ItemView {
     for (const entry of this.entries) {
       const question = list.createDiv({ cls: 'eai-question' });
       question.createDiv({ text: entry.q });
-      question.createDiv({ cls: 'eai-scope', text: entry.current ? `📌 以《${entry.current}》为主，其他笔记补充` : '🔍 在全部笔记里找' });
+      if (entry.images?.length) {
+        const row = question.createDiv({ cls: 'eai-question-images' });
+        for (const url of entry.images) row.createEl('img', { attr: { src: url, alt: '图片' } });
+      } else if (entry.imageCount) {
+        question.createDiv({ cls: 'eai-scope', text: `🖼 附了 ${entry.imageCount} 张图片` });
+      }
+      question.createDiv({ cls: 'eai-scope', text: this.scopeText(entry) });
       const answer = list.createDiv({ cls: 'eai-answer' });
       if (entry.pending) {
         answer.createEl('p', { cls: 'eai-hint', text: '正在翻笔记…' });
@@ -300,6 +465,17 @@ export class AskView extends ItemView {
     list.scrollTop = list.scrollHeight;
   }
 
+  private scopeText(entry: Entry): string {
+    const files = entry.refs?.files ?? [];
+    const folders = entry.refs?.folders ?? [];
+    const parts: string[] = [];
+    if (entry.current) parts.push(`📌 《${entry.current}》`);
+    if (files.length) parts.push(`📄 ${files.map((path) => `《${baseName(path)}》`).join('')}`);
+    const others = folders.length ? `📁 只在「${folders.map(baseName).join('」「')}」里找其他笔记` : '其他笔记补充';
+    if (!parts.length) return folders.length ? others : '🔍 在全部笔记里找';
+    return `以 ${parts.join(' ')} 为主，${others}`;
+  }
+
   private async save(entry: Entry) {
     const name = safeName(entry.q, '问答');
     const vault = this.app.vault;
@@ -317,7 +493,7 @@ export class AskView extends ItemView {
       `created: ${today()}`,
       '---',
       '',
-      `> [!question] 问题\n${quote(entry.q)}`,
+      `> [!question] 问题\n${quote(entry.imageCount ? `${entry.q}\n（附了 ${entry.imageCount} 张图片）` : entry.q)}`,
       '',
       `> [!ai] AI 根据你的笔记整理（「」是笔记原话，${INFER}是 AI 补充的）\n${quote(answer)}`
     ];

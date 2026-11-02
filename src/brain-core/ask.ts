@@ -12,7 +12,8 @@ export const ASK_SYSTEM = `你是用户的笔记助手，只根据「参考笔�
 5. 参考笔记和问题无关时，先回答「${NOT_FOUND}」，需要时再用「${INFER}」段落给一般性建议。
 6. 不要编造笔记里没有的事实、数字、人名和链接。
 7. 用中文回答，简洁，用 Markdown，不要用一级和二级标题。
-8. 「用户画像」是用户确认过的个人情况，只用来理解他的背景、让回答更贴合他，不能当作来源编号引用。`;
+8. 「用户画像」是用户确认过的个人情况，只用来理解他的背景、让回答更贴合他，不能当作来源编号引用。
+9. 标注了「用户指定的笔记」的，是用户用 @ 专门选给你的，要和「用户正在看的笔记」一样优先依据；问题里说「这几篇」「它们」时指的就是这些笔记。`;
 
 export function profileBlock(profile: string): string {
   return profile.trim() ? `## 用户画像\n${profile.trim().slice(0, 3000)}` : '';
@@ -23,20 +24,21 @@ export interface Turn {
   a: string;
 }
 
-export function askMessages(question: string, history: Turn[], groups: ContextGroup[], profile = ''): Message[] {
+export function askMessages(question: string, history: Turn[], groups: ContextGroup[], profile = '', images: string[] = []): Message[] {
   const notes = groups
-    .map(({ source, texts, current }) => `[${source.n}] 《${source.title}》${current ? '（用户正在看的笔记）' : ''}\n${texts.join('\n\n')}`)
+    .map(({ source, texts, current, picked }) => `[${source.n}] 《${source.title}》${current ? '（用户正在看的笔记）' : picked ? '（用户指定的笔记）' : ''}\n${texts.join('\n\n')}`)
     .join('\n\n---\n\n');
   const recent = history.slice(-3);
   const user = [
     profileBlock(profile),
     `## 参考笔记\n${notes || '（没有找到相关笔记）'}`,
     recent.length ? `## 之前的对话\n${recent.map((turn) => `问：${turn.q.slice(0, 500)}\n答：${turn.a.slice(0, 1000)}`).join('\n\n')}` : '',
+    images.length ? `## 图片\n用户附了 ${images.length} 张图片。先看清图片内容，再结合参考笔记回答；图片里的内容不是笔记原话，不要加「」和编号，需要时说明「图片里」。` : '',
     `## 问题\n${question.slice(0, 2000)}`
   ].filter(Boolean).join('\n\n');
   return [
     { role: 'system', content: ASK_SYSTEM },
-    { role: 'user', content: user }
+    { role: 'user', content: images.length ? [{ type: 'text', text: user }, ...images.map((url) => ({ type: 'image_url' as const, image_url: { url } }))] : user }
   ];
 }
 

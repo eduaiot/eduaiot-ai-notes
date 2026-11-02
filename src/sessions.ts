@@ -12,6 +12,8 @@ export interface SavedEntry {
   error: string;
   model?: string;
   modelId?: string;
+  imageCount?: number;
+  refs?: { files: string[]; folders: string[] };
 }
 
 export interface Session {

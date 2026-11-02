@@ -1,5 +1,5 @@
 import { requestUrl } from 'obsidian';
-import type { AskResult, Backend } from './backend';
+import { hasRefs, type AskResult, type Backend, type Refs } from './backend';
 import type { Hit, PinnedNote, Turn } from './core';
 
 export const OFFLINE = '没有连接到 EduAIoT 桌面版，请先打开它，或在设置里改成「只用本插件」';
@@ -81,7 +81,8 @@ export class DesktopBackend implements Backend {
     return result.related.slice(0, limit).map(hit);
   }
 
-  async ask(question: string, history: Turn[], pin: PinnedNote | null): Promise<AskResult> {
+  async ask(question: string, history: Turn[], pin: PinnedNote | null, _model?: string, images: string[] = [], refs?: Refs): Promise<AskResult> {
+    if (images.length || hasRefs(refs)) throw new Error('连接桌面版时还不能发图片或用 @ 指定笔记，请在插件设置里把运行方式改成「只用本插件」');
     const result = await this.call<{ answer: string; sources: { n: number; path: string; title: string }[] }>('ask', { question, history, path: pin?.path ?? '' });
     return { answer: result.answer, sources: result.sources.map((source) => ({ ...source, heading: '' })), model: this.model ? `桌面版 · ${this.model}` : '桌面版' };
   }

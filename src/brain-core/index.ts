@@ -1,8 +1,8 @@
 export { askMessages, citedNumbers, INFER, locateQuote, NOT_FOUND, verifyAnswer, type Turn, type Verified } from './ask';
 export { chunkNote, type Chunk } from './chunk';
-export { NoteEngine, type ChunkRecord, type ContextGroup, type Hit, type NoteSummary, type PinnedNote, type Source } from './engine';
+export { NoteEngine, type ChunkRecord, type ContextGroup, type Hit, type NoteSummary, type PinnedNote, type Scope, type Source } from './engine';
 export { KeywordIndex } from './keyword';
-export { chat, embed, ModelError, provider, PROVIDERS, type Http, type HttpRequest, type HttpResponse, type Message, type ModelConfig, type Provider } from './llm';
+export { chat, embed, listModels, ModelError, modelsOfKind, presetModels, provider, PROVIDERS, visionGuess, type ContentPart, type Http, type HttpRequest, type HttpResponse, type Message, type ModelConfig, type Provider } from './llm';
 export { jsonList } from './json';
 export { applyCuts, archiveFolder, classifyMessages, findCuts, parseClassify, sanitizePlan, type Cut } from './organize';
 export { cleanFolder, cleanTag, cleanTitle, organizeMessages, parseOrganize, parsePlan, planMessages, poorTitle, type FolderSummary, type OrganizeInput, type OrganizeResult, type PlanFolder } from './organize';

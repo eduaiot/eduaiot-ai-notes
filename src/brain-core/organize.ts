@@ -66,12 +66,14 @@ export interface FolderSummary {
 }
 
 const PLAN = `你是笔记整理顾问。根据用户现有的文件夹和笔记，设计一套清晰好找的分类文件夹结构。要求：
-1. 尽量保留用户现有的文件夹和命名习惯（比如「01-」这样的编号前缀），只在确实需要时才改名、合并或新建。
+1. 按笔记内容分类（领域、主题、用途）。尽量保留用户现有的按内容分的文件夹和命名习惯（比如「01-」这样的编号前缀），只在确实需要时才改名、合并或新建。
 2. 最多两层，一级文件夹 4 到 10 个。
 3. 每个文件夹写一句说明：放什么样的笔记。
 4. from 填哪些现有文件夹的笔记归到这里：保持不变就填它自己；改名就填原来的路径；几个合并成一个就都填上；新建的填空数组。现有文件夹都要有去处，除非它本来就合适而且你没有列出它的上级。
 5. 根目录下散落的笔记不用写进 from，之后会逐篇分配。
 6. 「受保护的文件夹」是其他插件或 Obsidian 设置在用的，必须原样保留（path 和 from 都是它自己），不能改名、不能合并到别处。
+7. 不要按来源平台（抖音、小红书、视频号、B 站、公众号等）、内容形式（录音、视频、图片、文章、闪念等）或时间建文件夹；现有的这类文件夹不要保留，也不要写进 from，里面的笔记之后会按内容逐篇分配。
+8. 不要设计「其他」「未分类」「未知」这类兜底文件夹，分不出来的笔记会自动放进「未知」等人工判断。
 只输出 JSON 数组，不要输出别的内容，格式：[{"path":"01-项目","from":["01-项目"],"desc":"一句话说明"}]`;
 
 export function planMessages(folders: FolderSummary[], loose: FolderSummary, topics: { name: string; summary: string; count: number }[], locked: string[] = [], base = ''): Message[] {
@@ -98,6 +100,12 @@ export function cleanFolder(path: string, depth = 2): string {
     .join('/');
 }
 
+const SOURCE = /^(\d+[-_. ]?)?(录音|语音|音频|视频|短视频|图片|照片|相册|截图|文章|图文|链接|网页|文件|文档|闪念|抖音|快手|小红书|视频号|b ?站|bilibili|哔哩哔哩|公众号|微信|微博|知乎|头条|今日头条|youtube|tiktok|douyin|xiaohongshu|weixin|wechat)$/i;
+
+export function sourceFolder(path: string): boolean {
+  return SOURCE.test(path.split('/').pop() ?? '');
+}
+
 const ARCHIVE = /^(\d{4}([-_.年]\d{1,2}月?)?([-_.月]\d{1,2}日?)?([-_ ]?old)?|附件|attachments?|assets)$/i;
 
 export function archiveFolder(path: string): boolean {
@@ -107,10 +115,12 @@ export function archiveFolder(path: string): boolean {
 export function sanitizePlan(plan: PlanFolder[]): PlanFolder[] {
   const uses = new Map<string, number>();
   for (const folder of plan) for (const from of new Set(folder.from)) uses.set(from, (uses.get(from) ?? 0) + 1);
-  return plan.map((folder) => ({
-    ...folder,
-    from: [...new Set(folder.from)].filter((from) => from === folder.path || (!archiveFolder(from) && (uses.get(from) ?? 0) < 2))
-  }));
+  return plan
+    .filter((folder) => !sourceFolder(folder.path))
+    .map((folder) => ({
+      ...folder,
+      from: [...new Set(folder.from)].filter((from) => from === folder.path || (!archiveFolder(from) && !sourceFolder(from) && (uses.get(from) ?? 0) < 2))
+    }));
 }
 
 export function parsePlan(text: string, existing: string[], base = ''): PlanFolder[] {
@@ -134,7 +144,8 @@ export function parsePlan(text: string, existing: string[], base = ''): PlanFold
 
 const CLASSIFY = `你是笔记分类助手。给每篇笔记选一个最合适的分类：
 1. 按笔记正文主要在讲什么来判断，不要只看标题里的字眼或标签；一篇笔记涉及好几个方面时，选它最核心的那个。
-2. 每篇只能选一个分类，填分类的编号；没有一个分类合适时填 0，表示留在原处。
+2. 不要因为来源平台（抖音、小红书、视频号等）或内容形式（录音、视频、图片等）勉强归类，要看讲的是什么。
+3. 每篇只能选一个分类，填分类的编号；看不出属于哪个分类时填 0，这篇会放进「未知」文件夹等人工判断。
 只输出 JSON 数组，不要输出别的内容，格式：[{"n":1,"c":2}]`;
 
 export function classifyMessages(categories: { path: string; desc: string }[], notes: { n: number; title: string; text: string }[]): Message[] {

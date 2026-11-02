@@ -1,5 +1,5 @@
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
-import { chat, provider, PROVIDERS, type ModelConfig } from './core';
+import { App, FuzzySuggestModal, Notice, PluginSettingTab, Setting, type TextComponent } from 'obsidian';
+import { chat, listModels, modelsOfKind, presetModels, provider, PROVIDERS, visionGuess, type ModelConfig } from './core';
 import type AiNotesPlugin from './main';
 import { aiRoot, DEFAULT_ROOT, skillFolder } from './store';
 
@@ -13,6 +13,7 @@ export interface ModelSetting {
 
 export interface ModelEntry extends ModelSetting {
   id: string;
+  vision?: boolean;
 }
 
 export type ModelUse = 'chat' | 'task';
@@ -99,6 +100,16 @@ export function modelLabel(entry: ModelSetting): string {
   return `${provider(entry.provider).name.replace(/（.*?）/g, '')} · ${entry.model || '未填模型'}`;
 }
 
+export function supportsImages(entry: ModelEntry): boolean {
+  return entry.vision ?? visionGuess(entry.model);
+}
+
+export function visionModel(settings: Settings, preferred: string): ModelEntry | null {
+  const first = resolveModel(settings, preferred);
+  if (supportsImages(first) && modelReady(settings, first)) return first;
+  return settings.models.find((item) => supportsImages(item) && modelReady(settings, item)) ?? null;
+}
+
 export function resolveModel(settings: Settings, use: string): ModelEntry {
   const id = use === 'chat' ? settings.chatModel : use === 'task' ? settings.taskModel : use;
   return settings.models.find((item) => item.id === id) ?? settings.models[0];
@@ -136,9 +147,64 @@ const MODES: Record<Mode, string> = {
   desktop: '只连 EduAIoT 桌面版'
 };
 
+class ModelSuggest extends FuzzySuggestModal<string> {
+  constructor(app: App, private readonly names: string[], private readonly pick: (name: string) => Promise<void>) {
+    super(app);
+    this.setPlaceholder('搜索模型名称');
+  }
+
+  getItems() {
+    return this.names;
+  }
+
+  getItemText(item: string) {
+    return item;
+  }
+
+  onChooseItem(item: string) {
+    void this.pick(item);
+  }
+}
+
 export class SettingTab extends PluginSettingTab {
+  private readonly fetched = new Map<string, Promise<string[]>>();
+
   constructor(app: App, private readonly plugin: AiNotesPlugin) {
     super(app, plugin);
+  }
+
+  private async modelNames(entry: { provider: string; baseUrl: string }, kind: 'chat' | 'embed'): Promise<string[]> {
+    const apiKey = this.plugin.settings.keys[entry.provider] ?? '';
+    let fetched: string[] = [];
+    if (entry.baseUrl.trim() && (apiKey || !provider(entry.provider).needsKey)) {
+      const cacheKey = `${entry.baseUrl}|${apiKey}`;
+      let names = this.fetched.get(cacheKey);
+      if (!names) {
+        names = listModels(this.plugin.http, { baseUrl: entry.baseUrl, apiKey }).catch(() => {
+          this.fetched.delete(cacheKey);
+          return [];
+        });
+        this.fetched.set(cacheKey, names);
+      }
+      fetched = modelsOfKind(await names, kind);
+    }
+    return [...new Set([...fetched, ...presetModels(entry.provider, kind)])];
+  }
+
+  private pickModel(setting: Setting, text: TextComponent, entry: { provider: string; baseUrl: string }, kind: 'chat' | 'embed', apply: (name: string) => Promise<void>) {
+    setting.addButton((button) => button.setButtonText('选择').setTooltip('从服务商获取可用的模型列表').onClick(async () => {
+      button.setDisabled(true);
+      const names = await this.modelNames(entry, kind);
+      button.setDisabled(false);
+      if (!names.length) {
+        new Notice(provider(entry.provider).needsKey && !this.plugin.settings.keys[entry.provider] ? '先填写 API key，才能获取模型列表' : '没有获取到模型列表，请直接填写模型名称');
+        return;
+      }
+      new ModelSuggest(this.app, names, async (name) => {
+        text.setValue(name);
+        await apply(name);
+      }).open();
+    }));
   }
 
   display() {
@@ -339,12 +405,22 @@ export class SettingTab extends PluginSettingTab {
         await this.plugin.saveSettings();
       }));
     const result = box.createEl('p', { cls: 'eai-hint' });
-    new Setting(box)
+    let modelText!: TextComponent;
+    const modelSetting = new Setting(box)
       .setName('模型名称')
-      .addText((text) => text.setValue(entry.model).onChange(async (value) => {
-        entry.model = value.trim();
-        await this.plugin.saveSettings();
-      }))
+      .setDesc('可以直接填写，也可以点「选择」从服务商获取可用的模型。')
+      .addText((text) => {
+        modelText = text;
+        text.setValue(entry.model).onChange(async (value) => {
+          entry.model = value.trim();
+          await this.plugin.saveSettings();
+        });
+      });
+    this.pickModel(modelSetting, modelText, entry, 'chat', async (name) => {
+      entry.model = name;
+      await this.plugin.saveSettings();
+    });
+    modelSetting
       .addButton((button) => button.setButtonText('测试').onClick(async () => {
         result.setText('正在测试…');
         try {
@@ -353,6 +429,13 @@ export class SettingTab extends PluginSettingTab {
         } catch (error) {
           result.setText(error instanceof Error ? error.message : String(error));
         }
+      }));
+    new Setting(box)
+      .setName('支持图片')
+      .setDesc('打开后，AI 问答里可以发截图给这个模型。默认按模型名判断（名字里带 vl、vision、4v、4o 等），新出的看图模型手动打开即可。')
+      .addToggle((toggle) => toggle.setValue(supportsImages(entry)).onChange(async (value) => {
+        entry.vision = value;
+        await this.plugin.saveSettings();
       }));
     box.appendChild(result);
   }
@@ -401,12 +484,20 @@ export class SettingTab extends PluginSettingTab {
           current.baseUrl = value.trim();
           await this.plugin.saveSettings();
         }));
+      let modelText!: TextComponent;
       const model = new Setting(box)
         .setName('模型名称')
-        .addText((text) => text.setValue(current.model).onChange(async (value) => {
-          current.model = value.trim();
-          await this.plugin.saveSettings();
-        }));
+        .addText((text) => {
+          modelText = text;
+          text.setValue(current.model).onChange(async (value) => {
+            current.model = value.trim();
+            await this.plugin.saveSettings();
+          });
+        });
+      this.pickModel(model, modelText, current, 'embed', async (name) => {
+        current.model = name;
+        await this.plugin.saveSettings();
+      });
 
       const progress = box.createEl('p', { cls: 'eai-hint', text: this.plugin.local.embedProgress() });
       model.addButton((button) => button.setButtonText('重新计算').onClick(async () => {

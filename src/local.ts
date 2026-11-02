@@ -1,8 +1,8 @@
 import { normalizePath, TAbstractFile, TFile } from 'obsidian';
-import { message, type AskResult, type Backend } from './backend';
+import { message, type AskResult, type Backend, type Refs } from './backend';
 import { askMessages, chat, embed, ModelError, NoteEngine, normalize, type Hit, type Message, type PinnedNote, type Turn, type VectorMeta } from './core';
 import type AiNotesPlugin from './main';
-import { embedConfig, embedId, modelConfig, modelLabel, modelReady, resolveModel } from './settings';
+import { embedConfig, embedId, modelConfig, modelLabel, modelReady, resolveModel, supportsImages } from './settings';
 
 const BATCH = 10;
 const SAVE_EVERY = 20;
@@ -272,14 +272,20 @@ export class LocalBackend implements Backend {
     return this.engine.chunkCount ? this.engine.embeddedCount / this.engine.chunkCount : 0;
   }
 
-  async ask(question: string, history: Turn[], pin: PinnedNote | null, model?: string): Promise<AskResult> {
+  async ask(question: string, history: Turn[], pin: PinnedNote | null, model?: string, images: string[] = [], refs: Refs = { files: [], folders: [] }): Promise<AskResult> {
     const use = model || 'chat';
     const entry = resolveModel(this.plugin.settings, use);
     if (!this.chatReady(use)) throw new ModelError(`模型「${modelLabel(entry)}」还没有设置好（API key、接口地址或模型名称），请在插件设置里填写`);
+    if (images.length && !supportsImages(entry)) throw new ModelError(`模型「${modelLabel(entry)}」不能看图片。请换一个能看图的模型，或在插件设置里给它打开「支持图片」`);
     await this.start();
     const query = `${question}\n${history.length ? history[history.length - 1].q : ''}`;
-    const groups = this.engine.context(query, await this.queryVector(query), pin);
-    const answer = await this.complete(askMessages(question, history, groups, await this.plugin.profile.promptText()), 2000, entry.id);
+    const picked: PinnedNote[] = [];
+    for (const path of refs.files) {
+      const file = this.plugin.app.vault.getFileByPath(path);
+      if (file) picked.push({ path, text: await this.plugin.app.vault.cachedRead(file) });
+    }
+    const groups = this.engine.context(query, await this.queryVector(query), pin, 6, 2, 9000, { refs: picked, folders: refs.folders });
+    const answer = await this.complete(askMessages(question, history, groups, await this.plugin.profile.promptText(), images), 2000, entry.id);
     return { answer, sources: groups.map((group) => group.source), model: modelLabel(entry) };
   }
 }
