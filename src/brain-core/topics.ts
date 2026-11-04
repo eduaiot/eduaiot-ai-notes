@@ -24,7 +24,7 @@ export interface Item {
 
 function dot(a: Float32Array, b: Float32Array): number {
   let sum = 0;
-  for (let i = 0; i < a.length; i++) sum += a[i] * b[i];
+  for (let i = 0; i < a.length; i++) sum += a[i]! * b[i]!;
   return sum;
 }
 
@@ -35,23 +35,23 @@ export function topicCount(notes: number): number {
 export function kmeans(items: Item[], k: number, random: Random = seeded('topics'), minSize = 3): Topic[] {
   if (!items.length) return [];
   const size = Math.min(k, items.length);
-  const centroids: Float32Array[] = [items[Math.floor(random() * items.length)].vector];
+  const centroids: Float32Array[] = [items[Math.floor(random() * items.length)]!.vector];
   const nearest = new Float64Array(items.length).fill(Infinity);
   while (centroids.length < size) {
     const last = centroids[centroids.length - 1];
     let total = 0;
     items.forEach((item, i) => {
-      nearest[i] = Math.min(nearest[i], Math.max(0, 1 - dot(item.vector, last)));
+      nearest[i] = Math.min(nearest[i]!, Math.max(0, 1 - dot(item.vector, last!)));
       total += nearest[i] * nearest[i];
     });
     if (!total) break;
     let target = random() * total;
     let index = 0;
     for (; index < items.length - 1; index++) {
-      target -= nearest[index] * nearest[index];
+      target -= nearest[index]! * nearest[index]!;
       if (target <= 0) break;
     }
-    centroids.push(items[index].vector);
+    centroids.push(items[index]!.vector);
   }
   const assign = new Int32Array(items.length).fill(-1);
   for (let round = 0; round < 20; round++) {
@@ -67,16 +67,16 @@ export function kmeans(items: Item[], k: number, random: Random = seeded('topics
         }
       });
       if (assign[i] !== best) {
-        assign[i] = best;
+        assign[i] = best!;
         changed = true;
       }
     });
     const sums = centroids.map((centroid) => new Float32Array(centroid.length));
     const counts = new Int32Array(centroids.length);
     items.forEach((item, i) => {
-      const sum = sums[assign[i]];
-      counts[assign[i]]++;
-      for (let d = 0; d < sum.length; d++) sum[d] += item.vector[d];
+      const sum = sums[assign[i]!]!;
+      counts[assign[i]!]!++;
+      for (let d = 0; d < sum.length; d++) sum[d]! += item.vector[d]!;
     });
     sums.forEach((sum, j) => {
       if (counts[j]) centroids[j] = normalize(sum);
@@ -84,21 +84,21 @@ export function kmeans(items: Item[], k: number, random: Random = seeded('topics
     if (!changed) break;
   }
   const sizes = new Int32Array(centroids.length);
-  assign.forEach((j) => sizes[j]++);
-  const large = centroids.map((_, j) => j).filter((j) => sizes[j] >= minSize);
+  assign.forEach((j) => sizes[j]!++);
+  const large = centroids.map((_, j) => j).filter((j) => sizes[j]! >= minSize);
   if (large.length && large.length < centroids.length) {
     items.forEach((item, i) => {
-      if (sizes[assign[i]] >= minSize) return;
+      if (sizes[assign[i]!]! >= minSize) return;
       let best = large[0];
       let score = -Infinity;
       for (const j of large) {
-        const value = dot(item.vector, centroids[j]);
+        const value = dot(item.vector, centroids[j]!);
         if (value > score) {
           score = value;
           best = j;
         }
       }
-      assign[i] = best;
+      assign[i] = best!;
     });
   }
   return centroids
@@ -124,13 +124,13 @@ export function bridges(topics: Topic[], vectorOf: (path: string) => Float32Arra
     .slice(0, 20);
   for (let i = 0; i < topics.length; i++) {
     for (let j = i + 1; j < topics.length; j++) {
-      const left = closest(topics[i], topics[j].centroid);
-      const right = closest(topics[j], topics[i].centroid);
+      const left = closest(topics[i]!, topics[j]!.centroid);
+      const right = closest(topics[j]!, topics[i]!.centroid);
       let best: Bridge | null = null;
       for (const a of left) {
         for (const b of right) {
           const score = dot(a.vector, b.vector);
-          if (!best || score > best.score) best = { a: a.path, b: b.path, ta: topics[i].id, tb: topics[j].id, score };
+          if (!best || score > best.score) best = { a: a.path, b: b.path, ta: topics[i]!.id, tb: topics[j]!.id, score };
         }
       }
       if (best) found.push(best);
@@ -181,7 +181,7 @@ export function parseNames(text: string, ids: number[]): Map<number, TopicName> 
   const oneBased = raw.every(Number.isFinite) && !raw.includes(0) && raw.every((id) => ids.includes(id - 1));
   list.forEach((item, i) => {
     let id = Number(item.id);
-    if (!Number.isFinite(id) || !ids.includes(oneBased ? id - 1 : id)) id = ids[i];
+    if (!Number.isFinite(id) || !ids.includes(oneBased ? id - 1 : id)) id = ids[i]!;
     else if (oneBased) id -= 1;
     const name = String(item.name).trim().replace(/^主题[:：]?/, '').slice(0, 20);
     if (id === undefined || !name || out.has(id)) return;

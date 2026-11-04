@@ -41,7 +41,7 @@ export function chunkNote(body: string, firstLine = 0): Chunk[] {
     const clean = text.trim();
     if (clean.replace(/\s/g, '').length < 4) return;
     chunks.push({
-      heading: stack.length ? stack[stack.length - 1] : '',
+      heading: stack[stack.length - 1] ?? '',
       trail: stack.filter(Boolean).join(' / '),
       text: clean,
       line
@@ -73,9 +73,9 @@ export function chunkNote(body: string, firstLine = 0): Chunk[] {
     if (heading) {
       endPara();
       flush();
-      const level = heading[1].length;
+      const level = heading[1]!.length;
       stack.length = level - 1;
-      stack[level - 1] = heading[2];
+      stack[level - 1] = heading[2]!;
       return;
     }
     if (!fenced && !line.trim()) {

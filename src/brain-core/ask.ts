@@ -84,7 +84,7 @@ export function locateQuote(text: string, quote: string): number {
   const probe = first.slice(0, 12);
   const head = probe.slice(0, 6);
   for (let i = 0; i < lines.length; i++) {
-    if (plain(lines[i]).includes(head) && plain(lines.slice(i, i + 3).join('')).includes(probe)) return i;
+    if (plain(lines[i]!).includes(head) && plain(lines.slice(i, i + 3).join('')).includes(probe)) return i;
   }
   return -1;
 }

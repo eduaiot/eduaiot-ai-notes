@@ -100,7 +100,7 @@ export class TodayView extends ItemView {
     }
     if (status.waiting) {
       const card = root.createDiv({ cls: 'eai-card' });
-      card.createDiv({ text: `向量计算中（${Math.floor(status.coverage * 100)}%）。算完后会自动从各个主题里挑代表笔记，第一次分析你的画像，覆盖更全。` });
+      card.createDiv({ text: `正在准备按意思搜索（${Math.floor(status.coverage * 100)}%）。准备好后会自动从各个主题里挑代表笔记，第一次分析你的画像，覆盖更全。` });
       card.createDiv({ cls: 'eai-actions' }).createEl('button', { text: '不等了，现在按文件夹分析' }).onclick = async () => {
         await this.plugin.profile.update(false);
         await this.refresh();

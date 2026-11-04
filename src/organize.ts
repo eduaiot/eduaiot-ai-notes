@@ -534,7 +534,7 @@ export class Organizer {
           if (pick === undefined || !(file instanceof TFile)) return;
           const current = folderOf(path);
           const placed = plan.some((folder) => current === folder.path || current.startsWith(`${folder.path}/`));
-          const target = pick ? plan[pick - 1].path : placed || current === unknown ? current : unknown;
+          const target = pick ? plan[pick - 1]!.path : placed || current === unknown ? current : unknown;
           const existing = this.state.suggestions.find((item) => item.path === path);
           if (existing) {
             existing.folder = target;
@@ -784,8 +784,8 @@ function setLinks(text: string, lines: string[]): string {
   const rows = text.split('\n');
   const start = rows.findIndex((row) => new RegExp(`^#{1,6}\\s+(?:[\\d.]+\\s*)?${LINKS_SECTION}\\s*$`).test(row));
   if (start < 0) return `${text.replace(/\s*$/, '')}\n\n### ${LINKS_SECTION}\n\n${lines.join('\n')}\n`;
-  const level = /^#+/.exec(rows[start])![0].length;
+  const level = /^#+/.exec(rows[start]!)![0].length;
   let end = start + 1;
-  while (end < rows.length && !(/^#{1,6}\s/.test(rows[end]) && /^#+/.exec(rows[end])![0].length <= level)) end++;
+  while (end < rows.length && !(/^#{1,6}\s/.test(rows[end]!) && /^#+/.exec(rows[end]!)![0].length <= level)) end++;
   return [...rows.slice(0, start + 1), '', ...lines, '', ...rows.slice(end)].join('\n');
 }

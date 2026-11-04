@@ -48,13 +48,13 @@ export function parseProfile(text: string): ProfileItem[] {
   text.split(/\r?\n/).forEach((raw, line) => {
     const heading = /^#{1,6}\s+(.+?)\s*$/.exec(raw);
     if (heading) {
-      section = heading[1].replace(/^[\d.]+\s*/, '');
+      section = heading[1]!.replace(/^[\d.]+\s*/, '');
       return;
     }
     if (!section) return;
     const match = ITEM.exec(raw);
     if (!match) return;
-    const body = match[2];
+    const body = match[2] ?? '';
     const evidence = EVIDENCE.exec(body)?.[1] ?? '';
     items.push({ section, text: body.replace(EVIDENCE, '').trim(), evidence, confirmed: match[1] !== INFERRED, line, raw });
   });
@@ -139,14 +139,14 @@ export function insertProfileItems(text: string, items: { section: string; line:
     if (!add.length) continue;
     let at = lines.findIndex((line) => /^#{1,6}\s+/.test(line) && line.replace(/^#{1,6}\s+/, '').replace(/^[\d.]+\s*/, '').trim() === section);
     if (at < 0) {
-      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop();
       lines.push('', `### ${section}`, '');
       at = lines.length - 2;
     }
     let end = at + 1;
-    while (end < lines.length && !/^#{1,6}\s+/.test(lines[end])) end++;
+    while (end < lines.length && !/^#{1,6}\s+/.test(lines[end]!)) end++;
     let last = end;
-    while (last > at + 1 && !lines[last - 1].trim()) last--;
+    while (last > at + 1 && !lines[last - 1]!.trim()) last--;
     lines.splice(last, 0, ...add);
   }
   return lines.join('\n');

@@ -1,7 +1,7 @@
 import { Component, MarkdownRenderer, Menu, setIcon, TFile } from 'obsidian';
 import { citedNumbers, INFER, locateQuote, NOT_FOUND, verifyAnswer, type Source } from './core';
 import type AiNotesPlugin from './main';
-import { modelLabel, modelReady } from './settings';
+import { DESKTOP_MODEL, modelLabel, modelReady } from './settings';
 
 export interface AnswerData {
   a: string;
@@ -42,33 +42,40 @@ export function openSettings(plugin: AiNotesPlugin) {
 }
 
 export function modelPicker(plugin: AiNotesPlugin, parent: HTMLElement, value: string, onChange: (id: string) => void) {
-  if (plugin.backend.kind === 'desktop') {
-    parent.createSpan({ cls: 'eai-hint eai-model-button', text: plugin.modeLabel() });
-    return;
-  }
   const settings = plugin.settings;
-  let current = settings.models.some((entry) => entry.id === value) ? value : settings.chatModel;
+  const valid = (id: string) => (id === DESKTOP_MODEL ? plugin.desktopOn : settings.models.some((entry) => entry.id === id));
+  let current = valid(value) ? value : plugin.defaultChat();
   const button = parent.createEl('button', { cls: 'eai-model-button' });
   const label = button.createSpan({ cls: 'eai-model-name' });
   setIcon(button.createSpan({ cls: 'eai-model-caret' }), 'chevron-up');
   const show = () => {
-    const entry = settings.models.find((item) => item.id === current) ?? settings.models[0];
+    if (current === DESKTOP_MODEL) {
+      label.setText(plugin.modeLabel());
+      button.title = '用 EduAIoT 桌面版对话框里选的模型，点击换一个模型（只影响这次对话）';
+      button.toggleClass('is-broken', !plugin.desktop.model);
+      return;
+    }
+    const entry = settings.models.find((item) => item.id === current) ?? settings.models[0]!;
     label.setText(entry.model || modelLabel(entry));
     button.title = `${modelLabel(entry)}，点击换一个模型（只影响这次对话）`;
     button.toggleClass('is-broken', !modelReady(settings, entry));
   };
   show();
+  const choose = (id: string) => {
+    current = id;
+    show();
+    onChange(id);
+  };
   button.onclick = (event) => {
     const menu = new Menu();
+    if (plugin.desktopOn) {
+      menu.addItem((item) => item.setTitle(plugin.modeLabel()).setChecked(current === DESKTOP_MODEL).onClick(() => choose(DESKTOP_MODEL)));
+    }
     for (const entry of settings.models) {
       menu.addItem((item) => item
         .setTitle(`${modelLabel(entry)}${modelReady(settings, entry) ? '' : '（未设置好）'}`)
         .setChecked(entry.id === current)
-        .onClick(() => {
-          current = entry.id;
-          show();
-          onChange(entry.id);
-        }));
+        .onClick(() => choose(entry.id)));
     }
     menu.addSeparator();
     menu.addItem((item) => item.setTitle('管理模型…').setIcon('settings').onClick(() => openSettings(plugin)));
@@ -77,12 +84,15 @@ export function modelPicker(plugin: AiNotesPlugin, parent: HTMLElement, value: s
 }
 
 export function retryButtons(plugin: AiNotesPlugin, parent: HTMLElement, used: string, retry: (id: string) => void) {
-  if (plugin.backend.kind === 'desktop') return;
   const settings = plugin.settings;
-  const others = settings.models.filter((entry) => entry.id !== used && modelReady(settings, entry)).slice(0, 3);
+  const others: { id: string; label: string }[] = [];
+  if (plugin.desktopOn && used !== DESKTOP_MODEL) others.push({ id: DESKTOP_MODEL, label: plugin.modeLabel() });
+  for (const entry of settings.models) {
+    if (entry.id !== used && modelReady(settings, entry)) others.push({ id: entry.id, label: modelLabel(entry) });
+  }
   if (!others.length) return;
   const box = parent.createDiv({ cls: 'eai-actions' });
-  for (const entry of others) box.createEl('button', { text: `改用 ${modelLabel(entry)} 重试` }).onclick = () => retry(entry.id);
+  for (const item of others.slice(0, 3)) box.createEl('button', { text: `改用 ${item.label} 重试` }).onclick = () => retry(item.id);
 }
 
 export function renderAnswer(plugin: AiNotesPlugin, parent: HTMLElement, data: AnswerData, component: Component) {

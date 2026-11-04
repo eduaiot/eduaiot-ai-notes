@@ -52,9 +52,9 @@ export function parseNote(text: string): ParsedNote {
   const match = FRONTMATTER.exec(text);
   if (!match) return { frontmatter: {}, body: text, bodyLine: 0 };
   const frontmatter: Record<string, string> = {};
-  for (const line of match[1].split(/\r?\n/)) {
+  for (const line of match[1]!.split(/\r?\n/)) {
     const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
-    if (kv) frontmatter[kv[1]] = scalar(kv[2]);
+    if (kv) frontmatter[kv[1]!] = scalar(kv[2]!);
   }
   return { frontmatter, body: text.slice(match[0].length), bodyLine: match[0].split('\n').length - 1 };
 }
@@ -64,7 +64,7 @@ export function basename(path: string): string {
 }
 
 export function noteTitle(title: string | undefined, path: string): string {
-  const clean = (title ?? '').split('\n')[0].replace(/#[^\s#]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const clean = (title ?? '').split('\n')[0]!.replace(/#[^\s#]+/g, ' ').replace(/\s+/g, ' ').trim();
   return clean.replace(/\s/g, '').length >= 4 ? clean.slice(0, 80) : basename(path);
 }
 

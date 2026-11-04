@@ -68,7 +68,7 @@ export async function listModels(http: Http, config: Pick<ModelConfig, 'baseUrl'
 }
 
 export function provider(id: string): Provider {
-  return PROVIDERS.find((item) => item.id === id) ?? PROVIDERS[PROVIDERS.length - 1];
+  return PROVIDERS.find((item) => item.id === id) ?? PROVIDERS[PROVIDERS.length - 1]!;
 }
 
 export interface ModelConfig {
@@ -174,12 +174,12 @@ export async function embed(http: Http, config: ModelConfig, inputs: string[]): 
     ...(config.dimensions ? { dimensions: config.dimensions } : {})
   })) as EmbedReply;
   const data = json.data;
-  if (!Array.isArray(data) || data.length !== inputs.length) throw new ModelError('向量模型返回的数量不对');
+  if (!Array.isArray(data) || data.length !== inputs.length) throw new ModelError('按意思搜索的服务返回的数量不对');
   return [...data]
     .sort((a, b) => (a?.index ?? 0) - (b?.index ?? 0))
     .map((item) => {
       const vector = item?.embedding;
-      if (!Array.isArray(vector) || !vector.length) throw new ModelError('向量模型返回的内容无法识别');
+      if (!Array.isArray(vector) || !vector.length) throw new ModelError('按意思搜索的服务返回的内容无法识别');
       return vector as number[];
     });
 }

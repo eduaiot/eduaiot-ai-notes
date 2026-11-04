@@ -11,10 +11,10 @@ export interface VectorMeta {
 
 export function normalize(vector: ArrayLike<number>): Float32Array {
   let sum = 0;
-  for (let i = 0; i < vector.length; i++) sum += vector[i] * vector[i];
+  for (let i = 0; i < vector.length; i++) sum += vector[i]! * vector[i]!;
   const norm = Math.sqrt(sum) || 1;
   const out = new Float32Array(vector.length);
-  for (let i = 0; i < vector.length; i++) out[i] = vector[i] / norm;
+  for (let i = 0; i < vector.length; i++) out[i] = vector[i]! / norm;
   return out;
 }
 
@@ -42,10 +42,10 @@ export class VectorStore {
     if (vector.length !== this.dim) throw new Error(`向量长度不一致：${vector.length} / ${this.dim}`);
     const unit = normalize(vector);
     let max = 0;
-    for (let i = 0; i < unit.length; i++) max = Math.max(max, Math.abs(unit[i]));
+    for (let i = 0; i < unit.length; i++) max = Math.max(max, Math.abs(unit[i]!));
     const s = max / 127 || 1;
     const q = new Int8Array(unit.length);
-    for (let i = 0; i < unit.length; i++) q[i] = Math.round(unit[i] / s);
+    for (let i = 0; i < unit.length; i++) q[i] = Math.round(unit[i]! / s);
     this.items.set(key, { q, s });
   }
 
@@ -53,7 +53,7 @@ export class VectorStore {
     const item = this.items.get(key);
     if (!item) return null;
     const out = new Float32Array(item.q.length);
-    for (let i = 0; i < out.length; i++) out[i] = item.q[i] * item.s;
+    for (let i = 0; i < out.length; i++) out[i] = item.q[i]! * item.s;
     return out;
   }
 
@@ -61,7 +61,7 @@ export class VectorStore {
     const item = this.items.get(key);
     if (!item || query.length !== item.q.length) return null;
     let dot = 0;
-    for (let i = 0; i < query.length; i++) dot += query[i] * item.q[i];
+    for (let i = 0; i < query.length; i++) dot += query[i]! * item.q[i]!;
     return dot * item.s;
   }
 
@@ -90,7 +90,7 @@ export class VectorStore {
     const scales = new Float32Array(data.slice(0, count * 4));
     const values = new Int8Array(data, count * 4);
     meta.keys.forEach((key, i) => {
-      this.items.set(key, { q: values.slice(i * meta.dim, (i + 1) * meta.dim), s: scales[i] });
+      this.items.set(key, { q: values.slice(i * meta.dim, (i + 1) * meta.dim), s: scales[i]! });
     });
   }
 }

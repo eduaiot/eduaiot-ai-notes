@@ -826,3 +826,31 @@
   line-height: 18px;
   box-shadow: none;
 }
+
+.eai-settings .setting-item-info {
+  flex: 1 1 45%;
+  min-width: 200px;
+}
+
+.eai-settings .setting-item-control {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 55%;
+}
+
+.eai-settings .setting-item-control select,
+.eai-settings .setting-item-control input[type='text'],
+.eai-settings .setting-item-control input[type='password'] {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.eai-settings .setting-item-control select {
+  text-overflow: ellipsis;
+}
+
+.eai-settings .setting-item-control textarea {
+  width: 100%;
+  min-width: 220px;
+}

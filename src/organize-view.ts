@@ -131,7 +131,7 @@ export class OrganizeView extends ItemView {
       const link = top.createEl('a', { cls: 'eai-link', text: item.path.replace(/\.md$/i, ''), href: '#' });
       link.onclick = (event) => {
         event.preventDefault();
-        void this.plugin.openNote(item.path, '', item.cuts[0].from, true);
+        void this.plugin.openNote(item.path, '', item.cuts[0]!.from, true);
       };
       for (const cut of item.cuts) {
         const block = card.createDiv({ cls: 'eai-cut-block' });

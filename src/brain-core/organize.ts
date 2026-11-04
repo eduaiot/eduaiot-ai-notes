@@ -195,11 +195,11 @@ export function findCuts(text: string, start: string, end: string, headingOnly: 
   }
   const cuts: Cut[] = [];
   for (let i = begin; i < lines.length; i++) {
-    if (!loose(lines[i]).includes(head) || (headingOnly && !/^\s*#{1,6}\s/.test(lines[i]))) continue;
+    if (!loose(lines[i]!).includes(head) || (headingOnly && !/^\s*#{1,6}\s/.test(lines[i]!))) continue;
     let j = i;
-    while (j < lines.length && !loose(lines[j]).includes(tail)) j++;
+    while (j < lines.length && !loose(lines[j]!).includes(tail)) j++;
     if (j >= lines.length) break;
-    cuts.push({ from: i, to: j, first: lines[i].trim(), last: lines[j].trim(), lines: j - i + 1 });
+    cuts.push({ from: i, to: j, first: lines[i]!.trim(), last: lines[j]!.trim(), lines: j - i + 1 });
     i = j;
   }
   return cuts;
@@ -208,7 +208,7 @@ export function findCuts(text: string, start: string, end: string, headingOnly: 
 export function applyCuts(text: string, cuts: Cut[]): string {
   if (!cuts.length) return text;
   const lines = text.split('\n');
-  const blank = (i: number) => i >= 0 && i < lines.length && !lines[i].trim();
+  const blank = (i: number) => i >= 0 && i < lines.length && !lines[i]!.trim();
   for (const cut of [...cuts].sort((a, b) => b.from - a.from)) {
     lines.splice(cut.from, cut.to - cut.from + 1);
     while (blank(cut.from - 1) && blank(cut.from)) lines.splice(cut.from, 1);

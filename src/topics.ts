@@ -48,9 +48,9 @@ export class TopicMapper {
   private ready(): string {
     const local = this.plugin.local;
     if (!local.chatReady()) return '还没有设置好对话模型，请在插件设置里填写 API key';
-    if (!local.engine.vectors.size) return '主题地图需要向量模型，请先在插件设置里选好向量模型并等它算完';
+    if (!local.engine.vectors.size) return '主题地图要先打开「按意思搜索」，请在插件设置里选好服务，等它准备好';
     const coverage = local.vectorCoverage();
-    if (coverage < MIN_COVERAGE) return `向量还没算完（${Math.floor(coverage * 100)}%），算到 ${MIN_COVERAGE * 100}% 以上再试`;
+    if (coverage < MIN_COVERAGE) return `按意思搜索还没准备好（${Math.floor(coverage * 100)}%），到 ${MIN_COVERAGE * 100}% 以上再试`;
     return '';
   }
 
@@ -78,7 +78,7 @@ export class TopicMapper {
         .map((note) => ({ path: note.path, vector: engine.noteVector(note.path) }))
         .filter((item): item is { path: string; vector: Float32Array } => !!item.vector);
       if (items.length < MIN_NOTES) {
-        new Notice(`至少要有 ${MIN_NOTES} 篇算好向量的笔记`);
+        new Notice(`至少要有 ${MIN_NOTES} 篇准备好按意思搜索的笔记`);
         return null;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 0));
@@ -103,7 +103,7 @@ export class TopicMapper {
         at: Date.now(),
         topics: topics.map((topic) => ({
           id: topic.id,
-          name: names.get(topic.id)?.name || fallback(topic.paths[0]),
+          name: names.get(topic.id)?.name || fallback(topic.paths[0] ?? ''),
           summary: names.get(topic.id)?.summary ?? '',
           paths: topic.paths
         })),

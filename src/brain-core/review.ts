@@ -55,7 +55,7 @@ export function weekKey(time: number): string {
 export function markReview(state: ReviewState, path: string, remembered: boolean, now: number) {
   const item = state.items[path] ?? { step: -1, due: 0, last: 0 };
   const step = remembered ? Math.min(item.step + 1, INTERVALS.length - 1) : 0;
-  state.items[path] = { step, due: startOfDay(now) + INTERVALS[step] * DAY, last: now };
+  state.items[path] = { step, due: startOfDay(now) + INTERVALS[step]! * DAY, last: now };
   if (!state.done.includes(path)) state.done.push(path);
 }
 

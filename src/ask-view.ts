@@ -1,4 +1,4 @@
-import { Component, FuzzySuggestModal, ItemView, Menu, Notice, TFile, TFolder, WorkspaceLeaf, normalizePath, type App, type TAbstractFile } from 'obsidian';
+import { Component, FuzzySuggestModal, ItemView, Menu, Notice, TFolder, WorkspaceLeaf, normalizePath, type App, type TAbstractFile } from 'obsidian';
 import { hasRefs, message, type Refs } from './backend';
 import { INFER, verifyAnswer, type PinnedNote, type Source, type Turn } from './core';
 import { modelPicker, renderAnswer, retryButtons, shownSources } from './answer';
@@ -245,7 +245,7 @@ export class AskView extends ItemView {
       .filter((entry) => !entry.pending)
       .map(({ q, a, current, sources, error, model, modelId, imageCount, refs }) => ({ q, a, current, sources, error, model, modelId, imageCount, refs }));
     if (!session.entries.length) return;
-    session.title = session.title || session.entries[0].q.split('\n')[0].slice(0, 40);
+    session.title = session.title || (session.entries[0]?.q.split('\n')[0] ?? '').slice(0, 40);
     session.updated = Date.now();
     await this.plugin.sessions.put(session);
   }
@@ -254,7 +254,7 @@ export class AskView extends ItemView {
     if (this.modeEl) {
       this.modeEl.empty();
       modelPicker(this.plugin, this.modeEl, this.session.model ?? '', (id) => {
-        this.session.model = id === this.plugin.settings.chatModel ? undefined : id;
+        this.session.model = id === this.plugin.defaultChat() ? undefined : id;
       });
     }
     if (!this.currentEl) return;
@@ -351,7 +351,7 @@ export class AskView extends ItemView {
     const images = [...this.images];
     const question = this.input.value.trim() || (images.length ? IMAGE_QUESTION : '');
     if (!question || this.entries.some((entry) => entry.pending)) return;
-    const modelId = this.pickModel(this.session.model || this.plugin.settings.chatModel, images);
+    const modelId = this.pickModel(this.session.model || this.plugin.defaultChat(), images);
     if (!modelId) return;
     const refs = this.refs;
     this.input.value = '';
@@ -389,7 +389,7 @@ export class AskView extends ItemView {
     const images = entry.images ?? [];
     const modelId = this.pickModel(picked, images);
     if (!modelId) return;
-    this.session.model = modelId === this.plugin.settings.chatModel ? undefined : modelId;
+    this.session.model = modelId === this.plugin.defaultChat() ? undefined : modelId;
     this.updateMode();
     const index = this.entries.indexOf(entry);
     const history: Turn[] = this.entries.slice(0, index).filter((item) => !item.error).map((item) => ({ q: item.q, a: item.a }));
@@ -487,7 +487,7 @@ export class AskView extends ItemView {
     const sources = shownSources(entry);
     const parts = [
       '---',
-      `title: ${JSON.stringify(entry.q.split('\n')[0].slice(0, 80))}`,
+      `title: ${JSON.stringify((entry.q.split('\n')[0] ?? '').slice(0, 80))}`,
       'type: 问答',
       'source: ai',
       `created: ${today()}`,

@@ -197,9 +197,9 @@ export class TopicGraphView extends ItemView {
   private tick() {
     const nodes = this.nodes.filter((node) => this.visible(node));
     for (let i = 0; i < nodes.length; i++) {
-      const a = nodes[i];
+      const a = nodes[i]!;
       for (let j = i + 1; j < nodes.length; j++) {
-        const b = nodes[j];
+        const b = nodes[j]!;
         let dx = a.x - b.x;
         let dy = a.y - b.y;
         let d2 = dx * dx + dy * dy;

@@ -200,7 +200,7 @@ export class PickModal extends Modal {
       const tools = row.createSpan({ cls: 'eai-pick-tools' });
       if (i > 0) {
         tools.createEl('button', { text: '↑' }).onclick = () => {
-          [this.chosen[i - 1], this.chosen[i]] = [this.chosen[i], this.chosen[i - 1]];
+          [this.chosen[i - 1], this.chosen[i]] = [this.chosen[i]!, this.chosen[i - 1]!];
           this.renderChosen();
         };
       }

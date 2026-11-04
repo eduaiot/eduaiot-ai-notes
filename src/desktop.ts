@@ -1,20 +1,13 @@
 import { requestUrl } from 'obsidian';
-import { hasRefs, type AskResult, type Backend, type Refs } from './backend';
-import type { Hit, PinnedNote, Turn } from './core';
+import { ModelError, type ContextGroup, type Hit, type Message, type PinnedNote } from './core';
 
-export const OFFLINE = '没有连接到 EduAIoT 桌面版，请先打开它，或在设置里改成「只用本插件」';
+export const OFFLINE = '没有连接到 EduAIoT 桌面版，请先打开它，或在设置里改成「只用下面填的模型」';
+const OUTDATED = 'EduAIoT 桌面版版本太旧，还不能给插件提供模型，请先更新桌面版';
 const PROBE_MS = 1500;
 
 interface Bridge {
   port: number;
   token: string;
-}
-
-interface DesktopHit {
-  path: string;
-  title: string;
-  score: number;
-  snippet: string;
 }
 
 interface NodeModules {
@@ -31,13 +24,54 @@ function env(name: string): string | undefined {
   return (window as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[name];
 }
 
-function hit(item: DesktopHit): Hit {
-  return { path: item.path, title: item.title, heading: '', line: -1, snippet: item.snippet ?? '', score: item.score ?? 0 };
+export interface DesktopNotes {
+  vault: string | null;
+  notes: number;
+  chunks: number;
+  embedded: number;
+  embedding: boolean;
+  error: string;
+  ready: boolean;
 }
 
-export class DesktopBackend implements Backend {
-  readonly kind = 'desktop';
+export interface DesktopHello {
+  vault: string;
+  configDir: string;
+  pluginDir: string;
+  exclude: string[];
+  embed: { id: string; baseUrl: string; model: string; apiKey: string; dimensions?: number } | null;
+}
+
+export class DesktopModel {
   model: string | null = null;
+  notes: DesktopNotes | null = null;
+
+  async hello(info: DesktopHello): Promise<DesktopNotes | null> {
+    try {
+      this.notes = await this.call<DesktopNotes>('hello', { ...info });
+    } catch {
+      this.notes = null;
+    }
+    return this.notes;
+  }
+
+  get indexing(): boolean {
+    const own = this.vault().replace(/[\\/]+$/, '');
+    const theirs = (this.notes?.vault ?? '').replace(/[\\/]+$/, '');
+    return this.notes !== null && theirs.toLowerCase() === own.toLowerCase();
+  }
+
+  async search(query: string, limit: number): Promise<Hit[]> {
+    return (await this.call<{ results: Hit[] }>('search', { query, limit })).results;
+  }
+
+  async related(path: string, limit: number): Promise<Hit[]> {
+    return (await this.call<{ results: Hit[] }>('related', { path, limit })).results;
+  }
+
+  async context(query: string, pin: PinnedNote | null, files: string[], folders: string[]): Promise<ContextGroup[]> {
+    return (await this.call<{ groups: ContextGroup[] }>('context', { query, pin, files, folders })).groups;
+  }
 
   constructor(private readonly vault: () => string, private readonly file: () => string) {}
 
@@ -60,31 +94,26 @@ export class DesktopBackend implements Backend {
   async probe(): Promise<boolean> {
     try {
       const status = await Promise.race([
-        this.call<{ model: string | null }>('status'),
+        this.call<{ model: string | null; notes?: DesktopNotes }>('status'),
         new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error(OFFLINE)), PROBE_MS))
       ]);
       this.model = status.model;
+      if (!status.notes) this.notes = null;
+      else if (this.notes) this.notes = status.notes;
       return true;
     } catch {
       this.model = null;
+      this.notes = null;
       return false;
     }
   }
 
-  async search(query: string, limit: number): Promise<Hit[]> {
-    const result = await this.call<{ results: DesktopHit[] }>('search', { query });
-    return result.results.slice(0, limit).map(hit);
-  }
-
-  async related(path: string, limit: number): Promise<Hit[]> {
-    const result = await this.call<{ related: DesktopHit[] }>('note', { path });
-    return result.related.slice(0, limit).map(hit);
-  }
-
-  async ask(question: string, history: Turn[], pin: PinnedNote | null, _model?: string, images: string[] = [], refs?: Refs): Promise<AskResult> {
-    if (images.length || hasRefs(refs)) throw new Error('连接桌面版时还不能发图片或用 @ 指定笔记，请在插件设置里把运行方式改成「只用本插件」');
-    const result = await this.call<{ answer: string; sources: { n: number; path: string; title: string }[] }>('ask', { question, history, path: pin?.path ?? '' });
-    return { answer: result.answer, sources: result.sources.map((source) => ({ ...source, heading: '' })), model: this.model ? `桌面版 · ${this.model}` : '桌面版' };
+  async complete(messages: Message[], maxTokens: number): Promise<string> {
+    if (messages.some((item) => typeof item.content !== 'string')) throw new ModelError('桌面版的模型还不能看图片，请在插件设置里加一个能看图的模型');
+    const result = await this.call<{ text: string; model: string | null }>('complete', { messages, maxTokens });
+    if (result.model) this.model = result.model;
+    if (typeof result.text !== 'string' || !result.text.trim()) throw new ModelError('模型没有返回内容');
+    return result.text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
   }
 
   private async call<T>(action: string, body: Record<string, unknown> = {}): Promise<T> {
@@ -108,7 +137,8 @@ export class DesktopBackend implements Backend {
     } catch {
       json = null;
     }
-    if (response.status !== 200) throw new Error((json as { error?: string } | null)?.error || `请求失败（${response.status}）`);
+    if (response.status === 404) throw new ModelError(OUTDATED);
+    if (response.status !== 200) throw new ModelError((json as { error?: string } | null)?.error || `桌面版请求失败（${response.status}）`);
     return json as T;
   }
 }

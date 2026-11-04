@@ -91,7 +91,7 @@ export class ProfileManager {
       const lines = text.split(/\r?\n/);
       const at = lines[item.line] === item.raw ? item.line : lines.indexOf(item.raw);
       if (at < 0) return text;
-      const next = change(lines[at]);
+      const next = change(lines[at]!);
       if (next === null) lines.splice(at, 1);
       else lines[at] = next;
       return lines.join('\n');
@@ -124,7 +124,10 @@ export class ProfileManager {
     const spread = (groups: string[][]) => {
       const out: string[] = [];
       for (let round = 0; out.length < total && groups.some((group) => group.length > round); round++) {
-        for (const group of groups) if (group[round] && out.length < total) out.push(group[round]);
+        for (const group of groups) {
+      const item = group[round];
+      if (item && out.length < total) out.push(item);
+    }
       }
       return out;
     };
@@ -139,7 +142,7 @@ export class ProfileManager {
     }
     const folders = new Map<string, string[]>();
     for (const note of notes) {
-      const key = note.path.includes('/') ? note.path.split('/')[0] : '';
+      const key = note.path.includes('/') ? (note.path.split('/')[0] ?? '') : '';
       folders.set(key, [...(folders.get(key) ?? []), note.path]);
     }
     return { paths: spread([...folders.values()]), by: `${folders.size} 个文件夹` };
@@ -210,7 +213,7 @@ export class ProfileManager {
         const key = normalizeProfileText(suggestion.text);
         if (!key || known.has(key)) continue;
         known.add(key);
-        const evidence = suggestion.evidence.map((n) => sourceLink(groups[n - 1].source)).join('、');
+        const evidence = suggestion.evidence.map((n) => sourceLink(groups[n - 1]!.source)).join('、');
         lines.push({ section: suggestion.section, line: `- ${INFERRED} ${suggestion.text}（依据：${evidence}）` });
       }
       const file = await this.ensure();

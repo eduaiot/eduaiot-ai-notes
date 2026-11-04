@@ -2,7 +2,7 @@ import { debounce, FileSystemAdapter, MarkdownView, normalizePath, Notice, Plugi
 import { ASK_VIEW, AskView } from './ask-view';
 import type { Backend } from './backend';
 import type { Http } from './core';
-import { DesktopBackend } from './desktop';
+import { DesktopModel, type DesktopHello } from './desktop';
 import { LocalBackend } from './local';
 import { RELATED_VIEW, RelatedView } from './related-view';
 import { GRAPH_VIEW, TopicGraphView } from './graph-view';
@@ -15,7 +15,7 @@ import { Reviewer } from './review';
 import { SearchModal } from './search-modal';
 import { SelectionTools } from './selection';
 import { SessionStore } from './sessions';
-import { loadSettings, modelLabel, resolveModel, SettingTab, type Settings } from './settings';
+import { DESKTOP_MODEL, embedConfig, embedId, loadSettings, modelLabel, resolveModel, SettingTab, type Settings } from './settings';
 import { SkillModal, SkillRunner } from './skills';
 import { aiRoot, LEGACY_ROOT, setRoot } from './store';
 import { TODAY_VIEW, TodayView } from './today-view';
@@ -28,8 +28,9 @@ const WEEKLY_DELAY_MS = 2 * 60_000;
 export default class AiNotesPlugin extends Plugin {
   settings!: Settings;
   local!: LocalBackend;
-  desktop!: DesktopBackend;
+  desktop!: DesktopModel;
   backend!: Backend;
+  desktopOn = false;
   readonly sessions = new SessionStore(this);
   readonly skills = new SkillRunner(this);
   readonly topics = new TopicMapper(this);
@@ -61,8 +62,9 @@ export default class AiNotesPlugin extends Plugin {
     setRoot(this.settings.root);
     this.lastExclude = this.settings.exclude;
     this.local = new LocalBackend(this);
-    this.desktop = new DesktopBackend(() => this.vaultPath(), () => this.settings.bridgeFile.trim());
-    this.backend = this.settings.mode === 'desktop' ? this.desktop : this.local;
+    this.desktop = new DesktopModel(() => this.vaultPath(), () => this.settings.bridgeFile.trim());
+    this.backend = this.local;
+    this.desktopOn = this.settings.mode === 'desktop';
 
     this.registerView(ASK_VIEW, (leaf) => new AskView(leaf, this));
     this.registerView(RELATED_VIEW, (leaf) => new RelatedView(leaf, this));
@@ -231,26 +233,38 @@ export default class AiNotesPlugin extends Plugin {
     return this.backend === backend;
   }
 
+  private helloInfo(): DesktopHello {
+    const config = embedConfig(this.settings);
+    return {
+      vault: this.vaultPath(),
+      configDir: this.app.vault.configDir,
+      pluginDir: this.manifest.dir ?? '',
+      exclude: this.settings.exclude.split('\n').map((line) => line.trim().replace(/^\/+|\/+$/g, '')).filter(Boolean),
+      embed: config ? { id: embedId(this.settings), ...config } : null
+    };
+  }
+
+  defaultChat(): string {
+    return this.desktopOn ? DESKTOP_MODEL : this.settings.chatModel;
+  }
+
   async detect(initial = false) {
     if (this.detecting) return;
     this.detecting = true;
     try {
       const mode = this.settings.mode;
-      let next: Backend = this.local;
-      if (mode === 'desktop') {
-        next = this.desktop;
-        await this.desktop.probe();
-      } else if (mode === 'auto' && (await this.desktop.probe())) {
-        next = this.desktop;
-      }
-      const changed = next !== this.backend;
-      this.backend = next;
-      if (next === this.local) {
-        if (!this.local.started) void this.local.start().then(() => this.refresh(true));
-        else this.local.kick();
-      }
+      const online = mode === 'local' ? false : await this.desktop.probe();
+      const next = mode === 'desktop' || (mode === 'auto' && online);
+      const changed = next !== this.desktopOn;
+      this.desktopOn = next;
+      const indexing = this.desktop.indexing;
+      if (next && online) await this.desktop.hello(this.helloInfo());
+      else this.desktop.notes = null;
+      if (indexing && !this.desktop.indexing) void this.local.resume();
+      if (!this.local.started) void this.local.start().then(() => this.refresh(true));
+      else this.local.kick();
       if (changed) {
-        if (!initial) new Notice(next === this.desktop ? '已连接 EduAIoT 桌面版' : '已改为本插件自己运行');
+        if (!initial) new Notice(next ? '已连接 EduAIoT 桌面版，AI 改用桌面版的模型' : '已改用插件里设置的模型');
         this.refresh(true);
       } else if (initial) {
         this.refresh(true);
@@ -262,7 +276,7 @@ export default class AiNotesPlugin extends Plugin {
   }
 
   modeLabel(): string {
-    if (this.backend === this.desktop) {
+    if (this.desktopOn) {
       if (!this.desktop.model && this.settings.mode === 'desktop') return '桌面版未连接';
       return `桌面版${this.desktop.model ? ` · ${this.desktop.model}` : ''}`;
     }
@@ -270,17 +284,21 @@ export default class AiNotesPlugin extends Plugin {
   }
 
   statusText(): string {
-    if (this.backend === this.desktop) {
+    const notes = this.desktop.indexing ? this.desktop.notes : null;
+    const index = notes
+      ? `笔记由桌面版检索，已读 ${notes.notes} 篇${notes.chunks ? `，按意思搜索已准备 ${Math.min(100, Math.floor((notes.embedded / Math.max(notes.chunks, 1)) * 100))}%${notes.error ? `（暂停：${notes.error}）` : ''}` : ''}`
+      : `${this.local.statusText()}。${this.local.embedProgress()}`;
+    if (this.desktopOn) {
       return this.desktop.model || this.settings.mode !== 'desktop'
-        ? `当前：已连接 EduAIoT 桌面版${this.desktop.model ? `，模型 ${this.desktop.model}` : ''}`
-        : '当前：桌面版没有打开';
+        ? `当前：AI 用 EduAIoT 桌面版的模型${this.desktop.model ? ` ${this.desktop.model}` : ''}，${index}`
+        : `当前：桌面版没有打开，${index}`;
     }
-    return `当前：本插件自己运行，${this.local.statusText()}。${this.local.embedProgress()}`;
+    return `当前：AI 用插件里设置的模型，${index}`;
   }
 
   refreshStatus() {
     if (!this.statusBar) return;
-    const detail = this.backend === this.desktop ? this.modeLabel() : this.local.statusText();
+    const detail = this.desktopOn ? this.modeLabel() : this.local.statusText();
     const review = this.reviewer.pendingCount();
     this.statusBar.setText(`易度助手 · ${detail}${review ? ` · 回顾 ${review}` : ''}`);
     this.statusBar.title = this.statusText();

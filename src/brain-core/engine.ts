@@ -177,11 +177,11 @@ export class NoteEngine {
       const vectors = notes.map((path) => ({ path, vector: this.noteVector(path) })).filter((item): item is { path: string; vector: Float32Array } => !!item.vector);
       for (let i = 0; i < vectors.length; i++) {
         for (let j = i + 1; j < vectors.length; j++) {
-          const a = vectors[i].vector;
-          const b = vectors[j].vector;
+          const a = vectors[i]!.vector;
+          const b = vectors[j]!.vector;
           let dot = 0;
-          for (let d = 0; d < a.length; d++) dot += a[d] * b[d];
-          if (dot >= threshold) join(vectors[i].path, vectors[j].path);
+          for (let d = 0; d < a.length; d++) dot += a[d]! * b[d]!;
+          if (dot >= threshold) join(vectors[i]!.path, vectors[j]!.path);
         }
       }
     }
@@ -300,7 +300,7 @@ export class NoteEngine {
       const vector = this.vectors.get(this.chunks.get(id)!.key);
       if (!vector) continue;
       if (!sum) sum = new Float32Array(vector.length);
-      for (let i = 0; i < vector.length; i++) sum[i] += vector[i];
+      for (let i = 0; i < vector.length; i++) sum[i]! += vector[i]!;
     }
     return sum ? normalize(sum) : null;
   }
@@ -372,7 +372,7 @@ export class NoteEngine {
     for (const chunk of this.fuse(query, vector, pin?.path, allow).slice(0, POOL)) take(chunk);
     if (allow && groups.size === fixed.size) {
       for (const [path, note] of this.notes) {
-        if (allow(path) && note.ids.length) take(this.chunks.get(note.ids[0])!);
+        if (allow(path) && note.ids.length) take(this.chunks.get(note.ids[0]!)!);
       }
     }
     return [...groups.values()]

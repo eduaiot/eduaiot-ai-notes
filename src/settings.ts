@@ -18,6 +18,8 @@ export interface ModelEntry extends ModelSetting {
 
 export type ModelUse = 'chat' | 'task';
 
+export const DESKTOP_MODEL = 'desktop';
+
 export interface Settings {
   mode: Mode;
   models: ModelEntry[];
@@ -74,11 +76,11 @@ type RawSettings = Partial<Omit<Settings, 'embed'>> & { chat?: Partial<ModelEntr
 
 export function loadSettings(input: unknown): Settings {
   const raw = (input ?? {}) as RawSettings;
-  const legacy = { ...DEFAULT_SETTINGS.models[0], ...raw.chat, id: 'm1' };
+  const legacy: ModelEntry = { ...DEFAULT_SETTINGS.models[0]!, ...raw.chat, id: 'm1' };
   const models: ModelEntry[] = Array.isArray(raw.models) && raw.models.length
     ? raw.models.filter((item) => item && typeof item.id === 'string')
     : [legacy];
-  const pick = (id: unknown) => (models.some((item) => item.id === id) ? (id as string) : models[0].id);
+  const pick = (id: unknown) => (models.some((item) => item.id === id) ? (id as string) : models[0]!.id);
   const { chat: _chat, ...rest } = raw;
   void _chat;
   return {
@@ -112,7 +114,7 @@ export function visionModel(settings: Settings, preferred: string): ModelEntry |
 
 export function resolveModel(settings: Settings, use: string): ModelEntry {
   const id = use === 'chat' ? settings.chatModel : use === 'task' ? settings.taskModel : use;
-  return settings.models.find((item) => item.id === id) ?? settings.models[0];
+  return settings.models.find((item) => item.id === id) ?? settings.models[0]!;
 }
 
 export function modelConfig(settings: Settings, entry: ModelSetting): ModelConfig {
@@ -142,9 +144,9 @@ export function embedId(settings: Settings): string {
 }
 
 const MODES: Record<Mode, string> = {
-  auto: '自动：桌面版开着就连桌面版，否则自己运行',
-  local: '只用本插件（用下面填的模型）',
-  desktop: '只连 EduAIoT 桌面版'
+  auto: '自动（推荐）',
+  local: '只用插件里的模型',
+  desktop: '只用桌面版的模型'
 };
 
 class ModelSuggest extends FuzzySuggestModal<string> {
@@ -211,12 +213,13 @@ export class SettingTab extends PluginSettingTab {
     const { containerEl } = this;
     const { settings } = this.plugin;
     containerEl.empty();
+    containerEl.addClass('eai-settings');
 
     new Setting(containerEl).setName('运行方式').setHeading();
     const state = containerEl.createEl('p', { cls: 'eai-hint', text: this.plugin.statusText() });
     new Setting(containerEl)
-      .setName('连接方式')
-      .setDesc('连桌面版时，用的是 EduAIoT 对话框里选的模型；自己运行时，用下面填的模型和 API key。')
+      .setName('用哪里的模型')
+      .setDesc('自动：EduAIoT 桌面版开着时，用它对话框里选的模型，不用填 API key；没开时用下面填的模型。发截图时用下面填的看图模型。')
       .addDropdown((dropdown) => {
         for (const [value, label] of Object.entries(MODES)) dropdown.addOption(value, label);
         dropdown.setValue(settings.mode).onChange(async (value) => {
@@ -229,7 +232,7 @@ export class SettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('对话模型').setDesc('可以添加多个模型。问答和批量任务分别选默认用哪个；在 AI 问答和选中文字的对话框里，也能临时换别的模型。').setHeading();
     this.modelsSection(containerEl);
 
-    new Setting(containerEl).setName('向量模型').setDesc('用来按意思找笔记，不填也能用，只按关键词找。DeepSeek 和 Kimi 没有向量模型，可以选通义千问、智谱、硅基流动或本机 Ollama。').setHeading();
+    new Setting(containerEl).setName('按意思搜索').setDesc('打开后能按意思找笔记，例如搜「怎么讲递归」，也能找到写着「排队问位置」的笔记。不打开也能用，只按关键词找。需要选一个服务：硅基流动、通义千问、智谱，或者本机 Ollama（DeepSeek 和 Kimi 暂不支持）。').setHeading();
     this.modelSection(containerEl, 'embed');
 
     new Setting(containerEl).setName('笔记范围').setHeading();
@@ -339,8 +342,8 @@ export class SettingTab extends PluginSettingTab {
         if (settings.models.length > 1) {
           head.addButton((button) => button.setButtonText('删除').setWarning().onClick(async () => {
             settings.models.splice(index, 1);
-            if (!settings.models.some((item) => item.id === settings.chatModel)) settings.chatModel = settings.models[0].id;
-            if (!settings.models.some((item) => item.id === settings.taskModel)) settings.taskModel = settings.models[0].id;
+            if (!settings.models.some((item) => item.id === settings.chatModel)) settings.chatModel = settings.models[0]!.id;
+            if (!settings.models.some((item) => item.id === settings.taskModel)) settings.taskModel = settings.models[0]!.id;
             await this.plugin.saveSettings();
             render();
           }));
@@ -408,7 +411,7 @@ export class SettingTab extends PluginSettingTab {
     let modelText!: TextComponent;
     const modelSetting = new Setting(box)
       .setName('模型名称')
-      .setDesc('可以直接填写，也可以点「选择」从服务商获取可用的模型。')
+      .setDesc('可以手填，或点「选择」从服务商获取。')
       .addText((text) => {
         modelText = text;
         text.setValue(entry.model).onChange(async (value) => {

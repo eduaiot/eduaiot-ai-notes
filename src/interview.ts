@@ -29,7 +29,7 @@ export class InterviewModal extends Modal {
       this.saved = true;
       this.close();
       const status = await this.plugin.profile.status();
-      new Notice(`已记进画像 ${count} 条。${status.waiting ? `向量算完（现在 ${Math.floor(status.coverage * 100)}%）后，AI 会再从各个主题的笔记里补充画像。` : ''}`, 8000);
+      new Notice(`已记进画像 ${count} 条。${status.waiting ? `按意思搜索准备好（现在 ${Math.floor(status.coverage * 100)}%）后，AI 会再从各个主题的笔记里补充画像。` : ''}`, 8000);
       this.plugin.refreshToday();
     };
     actions.createEl('button', { text: '跳过' }).onclick = () => this.close();

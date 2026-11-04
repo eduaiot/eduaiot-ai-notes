@@ -213,7 +213,7 @@ export class SelectionTools {
     if (!this.slot) return;
     this.slot.empty();
     modelPicker(this.plugin, this.slot, this.model, (id) => {
-      this.model = id === this.plugin.settings.chatModel ? '' : id;
+      this.model = id === this.plugin.defaultChat() ? '' : id;
     });
   }
 
@@ -260,7 +260,7 @@ export class SelectionTools {
     if (!picked || this.items.some((item) => item.pending)) return;
     chips.hide();
     const file = picked.view.file;
-    const item: Item = { q, a: '', current: file?.basename ?? '', modelId: this.model || this.plugin.settings.chatModel, sources: [], texts: new Map(), error: '', pending: true };
+    const item: Item = { q, a: '', current: file?.basename ?? '', modelId: this.model || this.plugin.defaultChat(), sources: [], texts: new Map(), error: '', pending: true };
     const history: Turn[] = this.items.filter((entry) => !entry.error).map((entry) => ({ q: entry.q, a: entry.a }));
     this.items.push(item);
     this.renderItems(list);
@@ -294,7 +294,7 @@ export class SelectionTools {
       if (item.error) {
         answer.createEl('p', { cls: 'eai-error', text: item.error });
         retryButtons(this.plugin, answer, item.modelId, (id) => {
-          this.model = id === this.plugin.settings.chatModel ? '' : id;
+          this.model = id === this.plugin.defaultChat() ? '' : id;
           this.renderPicker();
           this.items = this.items.filter((entry) => entry !== item);
           if (this.chips) void this.ask(item.q, list, this.chips);
@@ -337,7 +337,7 @@ export class SelectionTools {
     const items = this.items.filter((item) => !item.pending && !item.error);
     if (!items.length) return;
     const picked = this.picked;
-    const first = items[0];
+    const first = items[0]!;
     const adopted = items.map((item, i) => ({
       q: i === 0 && picked ? `关于「${picked.text.slice(0, 80)}${picked.text.length > 80 ? '…' : ''}」：${first.q}` : item.q,
       a: item.a,
