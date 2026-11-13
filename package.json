@@ -1,6 +1,6 @@
 {
   "name": "eduaiot-ai-notes",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",
