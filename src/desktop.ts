@@ -40,10 +40,12 @@ export interface DesktopHello {
   pluginDir: string;
   exclude: string[];
   embed: { id: string; baseUrl: string; model: string; apiKey: string; dimensions?: number } | null;
+  aiRoot: string;
 }
 
 export class DesktopModel {
   model: string | null = null;
+  vision = false;
   notes: DesktopNotes | null = null;
 
   async hello(info: DesktopHello): Promise<DesktopNotes | null> {
@@ -94,22 +96,24 @@ export class DesktopModel {
   async probe(): Promise<boolean> {
     try {
       const status = await Promise.race([
-        this.call<{ model: string | null; notes?: DesktopNotes }>('status'),
+        this.call<{ model: string | null; vision?: boolean; notes?: DesktopNotes }>('status'),
         new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error(OFFLINE)), PROBE_MS))
       ]);
       this.model = status.model;
+      this.vision = status.vision === true;
       if (!status.notes) this.notes = null;
       else if (this.notes) this.notes = status.notes;
       return true;
     } catch {
       this.model = null;
+      this.vision = false;
       this.notes = null;
       return false;
     }
   }
 
   async complete(messages: Message[], maxTokens: number): Promise<string> {
-    if (messages.some((item) => typeof item.content !== 'string')) throw new ModelError('桌面版的模型还不能看图片，请在插件设置里加一个能看图的模型');
+    if (!this.vision && messages.some((item) => typeof item.content !== 'string')) throw new ModelError('桌面版现在选的模型不能看图片，请在桌面版对话框里换一个能看图的模型，或在插件设置里加一个看图模型');
     const result = await this.call<{ text: string; model: string | null }>('complete', { messages, maxTokens });
     if (result.model) this.model = result.model;
     if (typeof result.text !== 'string' || !result.text.trim()) throw new ModelError('模型没有返回内容');

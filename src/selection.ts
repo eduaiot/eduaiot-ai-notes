@@ -1,5 +1,5 @@
 import { Component, MarkdownView, Notice, setIcon, TFile } from 'obsidian';
-import { modelPicker, renderAnswer, retryButtons, shownSources } from './answer';
+import { answerText, modelPicker, renderAnswer, retryButtons, shownSources } from './answer';
 import { ASK_VIEW, AskView } from './ask-view';
 import { message } from './backend';
 import type { Source, Turn } from './core';
@@ -305,7 +305,7 @@ export class SelectionTools {
       if (item.model) answer.createDiv({ cls: 'eai-meta', text: `由 ${item.model} 回答` });
       const actions = answer.createDiv({ cls: 'eai-actions' });
       actions.createEl('button', { text: '复制' }).onclick = async () => {
-        await navigator.clipboard.writeText(item.a);
+        await navigator.clipboard.writeText(answerText(item.a));
         new Notice('已复制');
       };
       const insert = actions.createEl('button', { text: '插入到下方' });
@@ -324,7 +324,7 @@ export class SelectionTools {
       return;
     }
     const sources = shownSources(item);
-    const body = item.a.split('\n').map((line) => `> ${line}`).join('\n');
+    const body = answerText(item.a).split('\n').map((line) => `> ${line}`).join('\n');
     const from = sources.length ? `\n>\n> 来源：${sources.map((source) => `[${source.n}] ${sourceLink(source)}`).join('、')}` : '';
     const block = `\n\n> [!ai] AI：${item.q.replace(/\n/g, ' ')}\n${body}${from}\n`;
     const editor = view.editor;

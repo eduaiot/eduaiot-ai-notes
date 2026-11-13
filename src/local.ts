@@ -24,6 +24,7 @@ export class LocalBackend implements Backend {
   private dirty = false;
   private embedError = '';
   private retry: number | null = null;
+  private desktopEmbedded = -1;
   private readonly timers = new Map<string, number>();
 
   constructor(private readonly plugin: AiNotesPlugin) {}
@@ -163,6 +164,17 @@ export class LocalBackend implements Backend {
     await this.loadVectors();
     this.plugin.refreshStatus();
     this.kick();
+  }
+
+  async syncDesktopVectors(notes: { embedded: number; embedding: boolean } | null) {
+    if (!notes || !this.started || notes.embedding || notes.embedded === this.desktopEmbedded) return;
+    const first = this.desktopEmbedded < 0;
+    this.desktopEmbedded = notes.embedded;
+    await this.ready;
+    const before = this.engine.embeddedCount;
+    await this.loadVectors();
+    this.plugin.refreshStatus();
+    if (!first && this.engine.embeddedCount > before && !this.engine.pending().length) this.plugin.vectorsDone();
   }
 
   kick() {
@@ -328,7 +340,7 @@ export class LocalBackend implements Backend {
 
   async ask(question: string, history: Turn[], pin: PinnedNote | null, model?: string, images: string[] = [], refs: Refs = { files: [], folders: [] }): Promise<AskResult> {
     const use = model || 'chat';
-    const desktop = this.desktopFor(use) && !images.length;
+    const desktop = this.desktopFor(use) && (!images.length || this.plugin.desktop.vision);
     const entry = resolveModel(this.plugin.settings, desktop || use === DESKTOP_MODEL ? 'chat' : use);
     if (!desktop && !this.chatReady(entry.id)) throw new ModelError(`模型「${modelLabel(entry)}」还没有设置好（API key、接口地址或模型名称），请在插件设置里填写`);
     if (!desktop && images.length && !supportsImages(entry)) throw new ModelError(`模型「${modelLabel(entry)}」不能看图片。请换一个能看图的模型，或在插件设置里给它打开「支持图片」`);

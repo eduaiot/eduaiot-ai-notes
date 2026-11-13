@@ -1,6 +1,6 @@
-import { App, Modal, normalizePath, Notice, TFile } from 'obsidian';
+import { App, Modal, normalizePath, Notice, SuggestModal, TFile } from 'obsidian';
 import { message } from './backend';
-import { bridges, fill, INSPIRE_TASK, kmeans, namingMessages, parseNames, skillMessages, topicCount, type Bridge } from './core';
+import { bridges, fill, INSPIRE_TASK, kmeans, namingMessages, normalize, parseNames, skillMessages, topicCount, type Bridge, type Topic } from './core';
 import type AiNotesPlugin from './main';
 import { aiRoot, ensureFolder, inRoot, readState, sourceLink, today, writeAiNote, writeState } from './store';
 
@@ -8,7 +8,7 @@ import { aiRoot, ensureFolder, inRoot, readState, sourceLink, today, writeAiNote
 const MIN_COVERAGE = 0.6;
 const MIN_NOTES = 6;
 
-interface SavedTopic {
+export interface SavedTopic {
   id: number;
   name: string;
   summary: string;
@@ -19,6 +19,15 @@ interface TopicState {
   at: number;
   topics: SavedTopic[];
   bridges: Bridge[];
+  total?: number;
+  added?: string[];
+  manual?: Record<string, number>;
+}
+
+function dot(a: Float32Array, b: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += a[i]! * b[i]!;
+  return sum;
 }
 
 export class TopicMapper {
@@ -37,6 +46,115 @@ export class TopicMapper {
       this.cache = saved.topics.length ? saved : null;
     }
     return this.cache;
+  }
+
+  async topicOf(path: string): Promise<SavedTopic | null> {
+    return (await this.state())?.topics.find((topic) => topic.paths.includes(path)) ?? null;
+  }
+
+  async isAdded(path: string): Promise<boolean> {
+    return (await this.state())?.added?.includes(path) ?? false;
+  }
+
+  private async save(state: TopicState) {
+    await writeState(this.app, 'topics', state);
+    this.cache = state;
+    await this.writeMap(state);
+  }
+
+  async catchUp(): Promise<number> {
+    const state = await this.state();
+    if (!state || this.busy) return 0;
+    await this.plugin.local.start();
+    const engine = this.plugin.local.engine;
+    let changed = false;
+    for (const topic of state.topics) {
+      const alive = topic.paths.filter((path) => engine.has(path) || this.app.vault.getFileByPath(path));
+      if (alive.length !== topic.paths.length) changed = true;
+      topic.paths = alive;
+    }
+    const centroids: { topic: SavedTopic; vector: Float32Array }[] = [];
+    for (const topic of state.topics) {
+      let sum: Float32Array | null = null;
+      for (const path of topic.paths) {
+        const vector = engine.noteVector(path);
+        if (!vector) continue;
+        sum ??= new Float32Array(vector.length);
+        for (let i = 0; i < vector.length; i++) sum[i]! += vector[i]!;
+      }
+      if (sum) centroids.push({ topic, vector: normalize(sum) });
+    }
+    const placed = new Set(state.topics.flatMap((topic) => topic.paths));
+    const added = new Set((state.added ?? []).filter((path) => placed.has(path)));
+    let count = 0;
+    for (const note of engine.list()) {
+      if (placed.has(note.path)) continue;
+      const vector = engine.noteVector(note.path);
+      if (!vector || !centroids.length) continue;
+      let best = centroids[0]!;
+      let score = -Infinity;
+      for (const item of centroids) {
+        const value = dot(vector, item.vector);
+        if (value > score) {
+          score = value;
+          best = item;
+        }
+      }
+      best.topic.paths.push(note.path);
+      placed.add(note.path);
+      added.add(note.path);
+      count++;
+    }
+    if (!count && !changed) return 0;
+    state.added = [...added];
+    await this.save(state);
+    return count;
+  }
+
+  async move(path: string, id: number): Promise<boolean> {
+    const state = await this.state();
+    const target = state?.topics.find((topic) => topic.id === id);
+    if (!state || !target) return false;
+    for (const topic of state.topics) topic.paths = topic.paths.filter((item) => item !== path);
+    target.paths.unshift(path);
+    state.manual = { ...state.manual, [path]: id };
+    state.added = (state.added ?? []).filter((item) => item !== path);
+    await this.save(state);
+    new Notice(`已放进主题「${target.name}」`);
+    return true;
+  }
+
+  async rename(from: string, to: string) {
+    const state = await this.state();
+    if (!state) return;
+    let changed = false;
+    for (const topic of state.topics) {
+      const at = topic.paths.indexOf(from);
+      if (at < 0) continue;
+      topic.paths[at] = to;
+      changed = true;
+    }
+    for (const bridge of state.bridges) {
+      if (bridge.a === from) bridge.a = to;
+      if (bridge.b === from) bridge.b = to;
+    }
+    if (state.manual && from in state.manual) {
+      state.manual[to] = state.manual[from]!;
+      delete state.manual[from];
+    }
+    if (state.added) state.added = state.added.map((item) => (item === from ? to : item));
+    if (changed) await writeState(this.app, 'topics', state);
+  }
+
+  async choose(path: string): Promise<boolean> {
+    const state = await this.state();
+    if (!state) {
+      new Notice('还没有主题地图，先在今日侧栏点「主题地图」生成一次');
+      return false;
+    }
+    const current = state.topics.find((topic) => topic.paths.includes(path))?.id ?? -1;
+    const picked = await new TopicSuggest(this.app, state.topics.filter((topic) => topic.id !== current)).pick();
+    return picked ? this.move(path, picked.id) : false;
   }
 
   async assignments(): Promise<Map<string, number>> {
@@ -72,6 +190,7 @@ export class TopicMapper {
     }
     this.busy = true;
     const notice = new Notice('正在分析笔记的主题…', 0);
+    const old = await this.state();
     try {
       const engine = this.plugin.local.engine;
       const items = engine.list()
@@ -83,6 +202,7 @@ export class TopicMapper {
       }
       await new Promise((resolve) => window.setTimeout(resolve, 0));
       const topics = kmeans(items, topicCount(items.length));
+      const manual = this.keepManual(old, topics);
       const vectors = new Map(items.map((item) => [item.path, item.vector]));
       const links = bridges(topics, (path) => vectors.get(path) ?? null, 8);
       const ids = topics.map((topic) => topic.id);
@@ -107,11 +227,12 @@ export class TopicMapper {
           summary: names.get(topic.id)?.summary ?? '',
           paths: topic.paths
         })),
-        bridges: links
+        bridges: links,
+        total: items.length,
+        added: [],
+        manual
       };
-      await writeState(this.app, 'topics', state);
-      this.cache = state;
-      await this.writeMap(state);
+      await this.save(state);
       notice.hide();
       if (open) await this.plugin.openGraph();
       new Notice(`主题地图已生成：${state.topics.length} 个主题`);
@@ -123,6 +244,29 @@ export class TopicMapper {
     } finally {
       this.busy = false;
     }
+  }
+
+  private keepManual(old: TopicState | null, topics: Topic[]): Record<string, number> {
+    const manual = old?.manual ?? {};
+    const kept: Record<string, number> = {};
+    for (const [path, id] of Object.entries(manual)) {
+      if (!this.plugin.local.engine.has(path)) continue;
+      const peers = new Set((old?.topics.find((topic) => topic.id === id)?.paths ?? []).filter((item) => item !== path && !(item in manual)));
+      let best: Topic | null = null;
+      let score = 0;
+      for (const topic of topics) {
+        const overlap = topic.paths.filter((item) => peers.has(item)).length;
+        if (overlap > score) {
+          score = overlap;
+          best = topic;
+        }
+      }
+      if (!best) continue;
+      for (const topic of topics) topic.paths = topic.paths.filter((item) => item !== path);
+      best.paths.unshift(path);
+      kept[path] = best.id;
+    }
+    return kept;
   }
 
   private async writeMap(state: TopicState): Promise<TFile> {
@@ -277,5 +421,40 @@ class BridgeModal extends Modal {
   onClose() {
     this.finish(null);
     this.contentEl.empty();
+  }
+}
+
+class TopicSuggest extends SuggestModal<SavedTopic> {
+  private resolve: (topic: SavedTopic | null) => void = () => undefined;
+  private chosen: SavedTopic | null = null;
+
+  constructor(app: App, private readonly topics: SavedTopic[]) {
+    super(app);
+    this.setPlaceholder('选一个主题，回车确定');
+  }
+
+  pick(): Promise<SavedTopic | null> {
+    return new Promise((resolve) => {
+      this.resolve = resolve;
+      this.open();
+    });
+  }
+
+  getSuggestions(query: string): SavedTopic[] {
+    const text = query.trim().toLowerCase();
+    return this.topics.filter((topic) => !text || topic.name.toLowerCase().includes(text) || topic.summary.toLowerCase().includes(text));
+  }
+
+  renderSuggestion(topic: SavedTopic, el: HTMLElement) {
+    el.createDiv({ text: `${topic.name} · ${topic.paths.length} 篇` });
+    if (topic.summary) el.createDiv({ cls: 'eai-meta', text: topic.summary });
+  }
+
+  onChooseSuggestion(topic: SavedTopic) {
+    this.chosen = topic;
+  }
+
+  onClose() {
+    window.setTimeout(() => this.resolve(this.chosen), 0);
   }
 }

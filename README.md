@@ -2,8 +2,6 @@
 
 [中文说明](#中文说明)
 
-Put your notes to work. Ask questions with sources from your own vault, find notes by meaning, get daily reviews and weekly reports, run AI skills such as viral-video breakdowns and topic ideas, and tidy up your vault — using the LLM you choose, with your own API key or a local model.
-
 ## Features
 
 - **Ask your notes**: answers are based only on your notes. Every sentence cites its source, quoted original text is checked against the note (click a verified quote to jump to that line), and anything the AI adds on its own is labelled as inference. Mention notes or folders with @, and paste screenshots for a vision model. Conversations are saved and can be continued.
@@ -12,10 +10,12 @@ Put your notes to work. Ask questions with sources from your own vault, find not
 - **Daily review**: a few older notes every day, with spaced repetition.
 - **Skills**: editable prompt templates stored as notes — weekly review, viral patterns, topic ideas, merge notes into a draft, idea cards. More skill packs can be installed from the built-in skill market.
 - **Weekly report and profile**: an automatic weekly report, and a profile of your interests that you confirm item by item.
-- **Topic graph**: notes are grouped into topics automatically and shown as an interactive graph, with cross-topic links for new ideas.
+- **Topic graph**: notes are grouped into topics automatically and shown as an interactive graph, with cross-topic links for new ideas. You can also right-click a note to put it into a topic manually.
 - **Organize notes**: a vault health check (untagged, orphan, empty and duplicate notes), AI suggestions for summary, tags, folder, title and related links, a folder plan and a preview map. Nothing is changed until you confirm, and note bodies are never rewritten.
 - **Multiple models**: Agnes (free), DeepSeek, Qwen, Zhipu GLM, Kimi, SiliconFlow, Ollama or any OpenAI-compatible API. Pick model names from the provider's list, set defaults for chat and batch tasks, and switch models in the chat box.
 - **Works with the EduAIoT desktop app**: when the desktop app is running, the plugin can use its model and its shared search index, and the desktop chat can search your notes too.
+
+Put your notes to work. Ask questions with sources from your own vault, find notes by meaning, get daily reviews and weekly reports, run AI skills such as viral-video breakdowns and topic ideas, and tidy up your vault — using the LLM you choose, with your own API key or a local model.
 
 ## Requirements
 
@@ -64,8 +64,6 @@ Download `main.js`, `manifest.json` and `styles.css` from the [latest release](.
 
 ## 中文说明
 
-易度助手：把记过的笔记真正用起来。只根据你自己的笔记回答问题并标出处，按意思找笔记，每天回顾、每周周报，用技能拆解爆款、生成选题，还能一键体检和整理笔记。AI 用你自己选的模型：自己的 API Key，或者本机的模型。
-
 ### 功能
 
 - **问我的笔记**：只根据你的笔记回答，每句标来源；引用的原话会回原文核对，点绿色原话直接跳到那一行；AI 自己补充的内容标「AI 推断」。可以用 @ 指定笔记或文件夹，也能粘贴截图给看图模型。会话自动保存，可以接着问。
@@ -74,10 +72,12 @@ Download `main.js`, `manifest.json` and `styles.css` from the [latest release](.
 - **每日回顾**：每天挑几篇旧笔记给你重温，按记忆曲线安排复习。
 - **技能**：可以直接修改的提示词模板，存成笔记。预置每周回顾、爆款规律、选题生成、多篇合稿、灵感卡；在「技能市场」里还能安装更多技能包。
 - **周报和画像**：每周自动生成周报；AI 从笔记里总结你的画像，逐条由你确认。
-- **主题图谱**：按内容把笔记自动分组，画成可以拖动、缩放的关系图，找出跨领域的连接。
+- **主题图谱**：按内容把笔记自动分组，画成可以拖动、缩放的关系图，找出跨领域的连接。也可以右键把笔记手动放进某个主题。
 - **整理笔记**：笔记体检（没标签、孤立、空笔记、重复笔记等）；AI 给出摘要、标签、文件夹、标题、相关笔记建议，可以设计分类方案、预览整理后的笔记地图。确认之前不改任何东西，正文不会被改写。
 - **多个模型**：Agnes（免费）、DeepSeek、通义千问、智谱、Kimi、硅基流动、Ollama，以及其他兼容 OpenAI 接口的服务。模型名称可以从服务商的列表里选；问答和批量任务分别设默认模型，对话时在输入框旁边就能切换。
 - **和 EduAIoT 桌面版一起用**：桌面版开着时，插件可以直接用桌面版的模型和共用的搜索索引；在桌面版对话里也能搜你的笔记。
+
+易度助手：把记过的笔记真正用起来。只根据你自己的笔记回答问题并标出处，按意思找笔记，每天回顾、每周周报，用技能拆解爆款、生成选题，还能一键体检和整理笔记。AI 用你自己选的模型：自己的 API Key，或者本机的模型。
 
 ### 使用前提
 

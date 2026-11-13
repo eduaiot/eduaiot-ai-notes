@@ -8,6 +8,7 @@ export interface Chunk {
 const MAX = 800;
 const HEADING = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
 const FENCE = /^\s*(```|~~~)/;
+const AI_CALLOUT = /^\s*>\s*\[!ai\]/i;
 const MARKS = ['\n', '。', '！', '？', '；', '. ', '! ', '? '];
 
 function split(text: string): string[] {
@@ -36,6 +37,7 @@ export function chunkNote(body: string, firstLine = 0): Chunk[] {
   let para: string[] = [];
   let paraStart = firstLine;
   let fenced = false;
+  let aiBlock = false;
 
   const emit = (text: string, line: number) => {
     const clean = text.trim();
@@ -68,6 +70,12 @@ export function chunkNote(body: string, firstLine = 0): Chunk[] {
   };
 
   body.split(/\r?\n/).forEach((line, i) => {
+    if (!fenced && (AI_CALLOUT.test(line) || (aiBlock && /^\s*>/.test(line)))) {
+      if (!aiBlock) endPara();
+      aiBlock = true;
+      return;
+    }
+    aiBlock = false;
     if (FENCE.test(line)) fenced = !fenced;
     const heading = fenced ? null : HEADING.exec(line);
     if (heading) {

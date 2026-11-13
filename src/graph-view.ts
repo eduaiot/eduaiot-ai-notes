@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf } from 'obsidian';
+import { ItemView, Menu, WorkspaceLeaf } from 'obsidian';
 import type AiNotesPlugin from './main';
 
 export const GRAPH_VIEW = 'eduaiot-ai-notes-graph';
@@ -18,6 +18,7 @@ interface GNode {
   vy: number;
   r: number;
   pinned: boolean;
+  fresh: boolean;
 }
 
 interface GEdge {
@@ -109,9 +110,10 @@ export class TopicGraphView extends ItemView {
   }
 
   async reload() {
+    await this.plugin.local.start();
+    const joined = await this.plugin.topics.catchUp();
     const state = await this.plugin.topics.state();
     const engine = this.plugin.local.engine;
-    await this.plugin.local.start();
     this.nodes = [];
     this.edges = [];
     this.legend.empty();
@@ -123,6 +125,7 @@ export class TopicGraphView extends ItemView {
       this.draw();
       return;
     }
+    const fresh = new Set(state.added ?? []);
     const byPath = new Map<string, GNode>();
     const bridged = new Set(state.bridges.flatMap((bridge) => [bridge.a, bridge.b]));
     const count = state.topics.length;
@@ -130,11 +133,11 @@ export class TopicGraphView extends ItemView {
       this.names.set(topic.id, topic.name);
       this.summaries.set(topic.id, topic.summary);
       const angle = (2 * Math.PI * i) / Math.max(count, 1);
-      const hub: GNode = { id: `topic-${topic.id}`, kind: 'topic', label: topic.name, topic: topic.id, path: '', x: Math.cos(angle) * 320, y: Math.sin(angle) * 320, vx: 0, vy: 0, r: 14, pinned: false };
+      const hub: GNode = { id: `topic-${topic.id}`, kind: 'topic', label: topic.name, topic: topic.id, path: '', x: Math.cos(angle) * 320, y: Math.sin(angle) * 320, vx: 0, vy: 0, r: 14, pinned: false, fresh: false };
       this.nodes.push(hub);
-      const paths = [...topic.paths.filter((path) => bridged.has(path)), ...topic.paths].filter((path, n, list) => list.indexOf(path) === n && engine.has(path)).slice(0, this.limit);
+      const paths = [...topic.paths.filter((path) => bridged.has(path) || fresh.has(path)), ...topic.paths].filter((path, n, list) => list.indexOf(path) === n && engine.has(path)).slice(0, this.limit);
       for (const path of paths) {
-        const node: GNode = { id: path, kind: 'note', label: engine.title(path), topic: topic.id, path, x: hub.x + (Math.random() - 0.5) * 120, y: hub.y + (Math.random() - 0.5) * 120, vx: 0, vy: 0, r: 5, pinned: false };
+        const node: GNode = { id: path, kind: 'note', label: engine.title(path), topic: topic.id, path, x: hub.x + (Math.random() - 0.5) * 120, y: hub.y + (Math.random() - 0.5) * 120, vx: 0, vy: 0, r: 5, pinned: false, fresh: fresh.has(path) };
         this.nodes.push(node);
         byPath.set(path, node);
         this.edges.push({ a: hub, b: node, kind: 'member' });
@@ -172,7 +175,12 @@ export class TopicGraphView extends ItemView {
       edge.a.r = Math.min(edge.a.r + 1, 10);
       edge.b.r = Math.min(edge.b.r + 1, 10);
     }
-    const tip = this.legend.createSpan({ cls: 'eai-hint', text: '点笔记打开，拖动节点或背景，滚轮缩放。紫色虚线是跨领域连接，灰线是笔记之间的双链。' });
+    const many = fresh.size >= Math.max(5, Math.round((state.total ?? 0) * 0.3));
+    if (fresh.size) {
+      const note = this.legend.createSpan({ cls: many ? 'eai-warn' : 'eai-hint', text: many ? `新加入了 ${fresh.size} 篇笔记，建议点「重新分析」重新分组` : `${joined ? `刚自动加入 ${joined} 篇新笔记，` : ''}带白圈的是新加入的笔记` });
+      note.title = '新笔记会自动放进内容最接近的主题；放得不对，可以右键笔记换主题';
+    }
+    const tip = this.legend.createSpan({ cls: 'eai-hint', text: '点笔记打开，右键换主题，拖动节点或背景，滚轮缩放。紫色虚线是跨领域连接，灰线是笔记之间的双链。' });
     tip.setCssStyles({ marginLeft: 'auto' });
     this.fit();
     this.kick();
@@ -320,6 +328,11 @@ export class TopicGraphView extends ItemView {
       ctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
       ctx.fillStyle = color(node.topic, faded ? 0.2 : node.kind === 'topic' ? 1 : 0.85);
       ctx.fill();
+      if (node.fresh && !faded) {
+        ctx.lineWidth = 1.5 / this.scale;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.stroke();
+      }
       if (matched(node) || node === this.hover) {
         ctx.lineWidth = 2 / this.scale;
         ctx.strokeStyle = text;
@@ -370,6 +383,7 @@ export class TopicGraphView extends ItemView {
     let lastX = 0;
     let lastY = 0;
     this.canvas.onpointerdown = (event) => {
+      if (event.button !== 0) return;
       this.canvas.setPointerCapture(event.pointerId);
       dragging = this.pick(event);
       panning = !dragging;
@@ -416,6 +430,21 @@ export class TopicGraphView extends ItemView {
       if (node.kind === 'note') void this.plugin.openNote(node.path, '', -1, event.metaKey || event.ctrlKey ? true : this.noteLeaf());
       else this.focusTopic(node);
     };
+    this.canvas.oncontextmenu = (event) => {
+      event.preventDefault();
+      const node = this.pick(event);
+      if (!node || node.kind !== 'note') return;
+      const menu = new Menu();
+      menu.addItem((item) => item.setTitle('打开笔记').setIcon('file-text').onClick(() => void this.plugin.openNote(node.path, '', -1, this.noteLeaf())));
+      menu.addSeparator();
+      for (const [id, name] of this.names) {
+        if (id === node.topic) continue;
+        menu.addItem((item) => item.setTitle(`移到「${name}」`).setIcon('folder-input').onClick(async () => {
+          if (await this.plugin.topics.move(node.path, id)) await this.reload();
+        }));
+      }
+      menu.showAtMouseEvent(event);
+    };
     this.canvas.onpointerleave = () => {
       this.hover = null;
       this.tip.hide();
@@ -441,7 +470,7 @@ export class TopicGraphView extends ItemView {
     }
     const rect = this.canvas.getBoundingClientRect();
     const summary = this.summaries.get(node.topic) ?? '';
-    this.tip.setText(node.kind === 'topic' ? `${node.label}${summary ? `\n${summary}` : ''}\n点一下放大` : `${node.label}\n${this.names.get(node.topic) ?? ''} · 点击打开`);
+    this.tip.setText(node.kind === 'topic' ? `${node.label}${summary ? `\n${summary}` : ''}\n点一下放大` : `${node.label}\n${this.names.get(node.topic) ?? ''}${node.fresh ? ' · 新加入' : ''} · 点击打开，右键换主题`);
     this.tip.setCssStyles({ left: `${event.clientX - rect.left + 12}px`, top: `${event.clientY - rect.top + 12}px` });
     this.tip.show();
   }

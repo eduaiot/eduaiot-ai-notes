@@ -10,10 +10,19 @@ export const ASK_SYSTEM = `你是用户的笔记助手，只根据「参考笔�
 3. 「」只用来引用笔记里一字不差的原话，后面跟编号，例如「原话」[1]。概括、改写、术语、你自己的说法都不要加「」。
 4. 笔记里没有、由你推理或补充的内容，单独成段，段首写「${INFER}」；这类段落里不要出现「」。
 5. 参考笔记和问题无关时，先回答「${NOT_FOUND}」，需要时再用「${INFER}」段落给一般性建议。
-6. 不要编造笔记里没有的事实、数字、人名和链接。
+6. 不要编造笔记里没有的事实、数字和人名。用户明确要网址、链接或仓库地址而笔记里没有时，要在「${INFER}」段落里给出你认为最可能的官方网址，写成 https:// 开头的完整网址；插件会自动检查它能不能打开并提示用户，所以不用因为没有十足把握就不给。完全想不出来时才说不知道。
 7. 用中文回答，简洁，用 Markdown，不要用一级和二级标题。
 8. 「用户画像」是用户确认过的个人情况，只用来理解他的背景、让回答更贴合他，不能当作来源编号引用。
-9. 标注了「用户指定的笔记」的，是用户用 @ 专门选给你的，要和「用户正在看的笔记」一样优先依据；问题里说「这几篇」「它们」时指的就是这些笔记。`;
+9. 标注了「用户指定的笔记」的，是用户用 @ 专门选给你的，要和「用户正在看的笔记」一样优先依据；问题里说「这几篇」「它们」时指的就是这些笔记。
+10. 只有用户明确要你修改、补充或整理他的某篇笔记时，才在回答最后给出修改方案；没要求就不要给。插件会先给用户看改动，用户确认后才写入，所以不要说你不能修改笔记。格式如下，[编号] 是参考笔记的编号，可以给多段：
+\`\`\`edit [1]
+<<<<<<< SEARCH
+要被替换的原文
+=======
+修改后的内容
+>>>>>>> REPLACE
+\`\`\`
+   SEARCH 里的原文必须从参考笔记里一字不差地复制，尽量短，但要能唯一定位；只想在笔记末尾追加内容时，SEARCH 留空。正文里用一两句话说明改了什么。`;
 
 export function profileBlock(profile: string): string {
   return profile.trim() ? `## 用户画像\n${profile.trim().slice(0, 3000)}` : '';
@@ -91,4 +100,50 @@ export function locateQuote(text: string, quote: string): number {
 
 export function citedNumbers(answer: string): Set<number> {
   return new Set([...answer.matchAll(/\[(\d+)\]/g)].map((match) => Number(match[1])));
+}
+
+export interface NoteEdit {
+  n: number;
+  search: string;
+  replace: string;
+}
+
+const EDIT = /```edit\s*\[?(\d+)\]?[^\n]*\n<<<<<<< *SEARCH[^\n]*\n([\s\S]*?)\n?=======[^\n]*\n([\s\S]*?)\n?>>>>>>> *REPLACE[^\n]*\n?```/g;
+
+export function splitEdits(text: string): { text: string; edits: NoteEdit[] } {
+  const edits: NoteEdit[] = [];
+  const rest = text.replace(EDIT, (_match, n: string, search: string, replace: string) => {
+    edits.push({ n: Number(n), search: search.replace(/^（[^\n]*）\n/, ''), replace });
+    return '';
+  });
+  return { text: rest.replace(/\n{3,}/g, '\n\n').trim(), edits };
+}
+
+export function applyEdit(content: string, edit: NoteEdit): string | null {
+  const text = content.replace(/\r\n/g, '\n');
+  const replace = edit.replace.replace(/\s+$/, '');
+  if (!edit.search.trim()) return `${text.replace(/\s*$/, '')}\n\n${replace.replace(/^\s+/, '')}\n`;
+  const search = edit.search.replace(/\s+$/, '');
+  const at = text.indexOf(search);
+  if (at >= 0) return text.slice(0, at) + replace + text.slice(at + search.length);
+  const want = search.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (!want.length) return null;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.trim() !== want[0]) continue;
+    let j = i;
+    let k = 0;
+    while (j < lines.length && k < want.length) {
+      const line = lines[j]!.trim();
+      if (!line) {
+        j++;
+        continue;
+      }
+      if (line !== want[k]) break;
+      j++;
+      k++;
+    }
+    if (k === want.length) return [...lines.slice(0, i), replace, ...lines.slice(j)].join('\n');
+  }
+  return null;
 }

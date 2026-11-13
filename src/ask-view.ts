@@ -1,10 +1,10 @@
 import { Component, FuzzySuggestModal, ItemView, Menu, Notice, TFolder, WorkspaceLeaf, normalizePath, type App, type TAbstractFile } from 'obsidian';
 import { hasRefs, message, type Refs } from './backend';
 import { INFER, verifyAnswer, type PinnedNote, type Source, type Turn } from './core';
-import { modelPicker, renderAnswer, retryButtons, shownSources } from './answer';
+import { answerText, modelPicker, renderAnswer, retryButtons, shownSources } from './answer';
 import type AiNotesPlugin from './main';
 import { newSession, type Session } from './sessions';
-import { modelLabel, visionModel } from './settings';
+import { DESKTOP_MODEL, modelLabel, visionModel } from './settings';
 import { ensureFolder, inRoot, safeName, sourceLink, sourceTexts, stamp, today } from './store';
 
 export const ASK_VIEW = 'eduaiot-ai-notes-ask';
@@ -45,6 +45,7 @@ interface Entry {
   images?: string[];
   imageCount?: number;
   refs?: Refs;
+  applied?: number[];
   sources: Source[];
   texts: Map<number, string>;
   error: string;
@@ -243,7 +244,7 @@ export class AskView extends ItemView {
     const session = this.session;
     session.entries = this.entries
       .filter((entry) => !entry.pending)
-      .map(({ q, a, current, sources, error, model, modelId, imageCount, refs }) => ({ q, a, current, sources, error, model, modelId, imageCount, refs }));
+      .map(({ q, a, current, sources, error, model, modelId, imageCount, refs, applied }) => ({ q, a, current, sources, error, model, modelId, imageCount, refs, applied }));
     if (!session.entries.length) return;
     session.title = session.title || (session.entries[0]?.q.split('\n')[0] ?? '').slice(0, 40);
     session.updated = Date.now();
@@ -333,6 +334,7 @@ export class AskView extends ItemView {
 
   private pickModel(modelId: string, images: string[]): string | null {
     if (!images.length) return modelId;
+    if (modelId === DESKTOP_MODEL && this.plugin.desktopOn && this.plugin.desktop.vision) return modelId;
     const chosen = visionModel(this.plugin.settings, modelId);
     if (!chosen) {
       new Notice('现在设置的模型都不能看图片。请在插件设置里加一个能看图的模型（比如通义千问 qwen-vl-max、智谱 glm-4v-flash），并打开「支持图片」', 10000);
@@ -370,6 +372,7 @@ export class AskView extends ItemView {
       const result = await backend.ask(question, history, pin, modelId, images, refs);
       entry.model = result.model;
       entry.a = result.answer;
+      entry.applied = undefined;
       entry.sources = result.sources;
       entry.texts = await this.sourceTexts(result.sources);
     } catch (error) {
@@ -403,6 +406,7 @@ export class AskView extends ItemView {
       const backend = images.length || hasRefs(refs) ? this.plugin.local : this.plugin.backend;
       const result = await backend.ask(entry.q, history, pin, modelId, images, refs);
       entry.a = result.answer;
+      entry.applied = undefined;
       entry.model = result.model;
       entry.sources = result.sources;
       entry.texts = await this.sourceTexts(result.sources);
@@ -453,12 +457,15 @@ export class AskView extends ItemView {
         retryButtons(this.plugin, answer, entry.modelId ?? '', (id) => void this.retry(entry, id));
         continue;
       }
-      renderAnswer(this.plugin, answer, entry, this.renderer);
+      renderAnswer(this.plugin, answer, entry, this.renderer, (applied) => {
+        entry.applied = applied;
+        void this.persist();
+      });
       if (entry.model) answer.createDiv({ cls: 'eai-meta', text: `由 ${entry.model} 回答` });
       const actions = answer.createDiv({ cls: 'eai-actions' });
       actions.createEl('button', { text: '存成笔记' }).onclick = () => this.save(entry);
       actions.createEl('button', { text: '复制' }).onclick = async () => {
-        await navigator.clipboard.writeText(entry.a);
+        await navigator.clipboard.writeText(answerText(entry.a));
         new Notice('已复制');
       };
     }
@@ -482,7 +489,7 @@ export class AskView extends ItemView {
     await ensureFolder(this.app, inRoot('问答'));
     let path = normalizePath(`${inRoot('问答')}/${stamp()} ${name}.md`);
     for (let i = 2; vault.getAbstractFileByPath(path); i++) path = normalizePath(`${inRoot('问答')}/${stamp()} ${name}-${i}.md`);
-    const answer = verifyAnswer(entry.a, entry.texts, (quote, ok, cite) => `「${quote}」${cite}${ok ? '' : '（原文里没找到）'}`).text;
+    const answer = verifyAnswer(answerText(entry.a), entry.texts, (quote, ok, cite) => `「${quote}」${cite}${ok ? '' : '（原文里没找到）'}`).text;
     const quote = (text: string) => text.split('\n').map((line) => `> ${line}`).join('\n');
     const sources = shownSources(entry);
     const parts = [

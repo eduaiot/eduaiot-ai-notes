@@ -1,4 +1,4 @@
-import { debounce, FileSystemAdapter, MarkdownView, normalizePath, Notice, Plugin, requestUrl, TFile, TFolder, type WorkspaceLeaf } from 'obsidian';
+import { debounce, FileSystemAdapter, MarkdownView, normalizePath, Notice, Plugin, requestUrl, TFile, TFolder, type MenuItem, type WorkspaceLeaf } from 'obsidian';
 import { ASK_VIEW, AskView } from './ask-view';
 import type { Backend } from './backend';
 import type { Http } from './core';
@@ -25,12 +25,19 @@ const DETECT_MS = 30_000;
 const WEEKLY_MS = 60 * 60_000;
 const WEEKLY_DELAY_MS = 2 * 60_000;
 
+interface NavigatorApi {
+  menus?: {
+    registerFileMenu?: (callback: (context: { addItem: (build: (item: MenuItem) => void) => void; file: unknown; selection: { mode: string } }) => void) => unknown;
+  };
+}
+
 export default class AiNotesPlugin extends Plugin {
   settings!: Settings;
   local!: LocalBackend;
   desktop!: DesktopModel;
   backend!: Backend;
   desktopOn = false;
+  private navigatorMenu: (() => void) | null = null;
   readonly sessions = new SessionStore(this);
   readonly skills = new SkillRunner(this);
   readonly topics = new TopicMapper(this);
@@ -114,6 +121,7 @@ export default class AiNotesPlugin extends Plugin {
       if (!(file instanceof TFile) || file.extension !== 'md') return;
       menu.addItem((item) => item.setTitle('运行 AI 技能…').setIcon('sparkles').onClick(() => this.openSkills(file)));
       menu.addItem((item) => item.setTitle('生成灵感卡').setIcon('lightbulb').onClick(() => this.skills.runByName('灵感卡', { file })));
+      menu.addItem((item) => this.graphItem(item, file));
     }));
     this.registerEvent(this.app.workspace.on('files-menu', (menu, files) => {
       const paths = files.filter((file): file is TFile => file instanceof TFile && file.extension === 'md').map((file) => file.path);
@@ -134,10 +142,12 @@ export default class AiNotesPlugin extends Plugin {
       this.local.drop(oldPath);
       this.local.touch(file);
       this.organizer.renamed(oldPath, file.path);
+      void this.topics.rename(oldPath, file.path);
       if (this.lastFile?.path === oldPath && file instanceof TFile) this.lastFile = file;
     }));
 
     this.app.workspace.onLayoutReady(async () => {
+      this.hookNavigator();
       const active = this.app.workspace.getActiveFile();
       if (active?.extension === 'md') this.lastFile = active;
       if (!this.settings.rootChecked) await this.migrateRoot();
@@ -229,6 +239,27 @@ export default class AiNotesPlugin extends Plugin {
     throw new Error('只支持电脑版 Obsidian');
   }
 
+  private graphItem(item: MenuItem, file: TFile) {
+    item.setTitle('放进主题图谱…').setIcon('git-fork').onClick(async () => {
+      if (!(await this.topics.choose(file.path))) return;
+      for (const leaf of this.app.workspace.getLeavesOfType(GRAPH_VIEW)) if (leaf.view instanceof TopicGraphView) await leaf.view.reload();
+    });
+  }
+
+  private hookNavigator() {
+    if (this.navigatorMenu) return;
+    const plugins = (this.app as unknown as { plugins?: { plugins?: Record<string, { api?: NavigatorApi } | undefined> } }).plugins?.plugins;
+    const register = plugins?.['notebook-navigator']?.api?.menus?.registerFileMenu;
+    if (typeof register !== 'function') return;
+    const off = register((context) => {
+      const file = context.file;
+      if (context.selection.mode !== 'single' || !(file instanceof TFile) || file.extension !== 'md') return;
+      context.addItem((item) => this.graphItem(item, file));
+    });
+    this.navigatorMenu = typeof off === 'function' ? () => void (off as () => void)() : () => undefined;
+    this.register(() => this.navigatorMenu?.());
+  }
+
   isActive(backend: Backend) {
     return this.backend === backend;
   }
@@ -240,7 +271,8 @@ export default class AiNotesPlugin extends Plugin {
       configDir: this.app.vault.configDir,
       pluginDir: this.manifest.dir ?? '',
       exclude: this.settings.exclude.split('\n').map((line) => line.trim().replace(/^\/+|\/+$/g, '')).filter(Boolean),
-      embed: config ? { id: embedId(this.settings), ...config } : null
+      embed: config ? { id: embedId(this.settings), ...config } : null,
+      aiRoot: aiRoot()
     };
   }
 
@@ -249,6 +281,7 @@ export default class AiNotesPlugin extends Plugin {
   }
 
   async detect(initial = false) {
+    this.hookNavigator();
     if (this.detecting) return;
     this.detecting = true;
     try {
@@ -263,6 +296,7 @@ export default class AiNotesPlugin extends Plugin {
       if (indexing && !this.desktop.indexing) void this.local.resume();
       if (!this.local.started) void this.local.start().then(() => this.refresh(true));
       else this.local.kick();
+      if (this.desktop.indexing) void this.local.syncDesktopVectors(this.desktop.notes);
       if (changed) {
         if (!initial) new Notice(next ? '已连接 EduAIoT 桌面版，AI 改用桌面版的模型' : '已改用插件里设置的模型');
         this.refresh(true);

@@ -1,4 +1,4 @@
-export { askMessages, citedNumbers, INFER, locateQuote, NOT_FOUND, verifyAnswer, type Turn, type Verified } from './ask';
+export { applyEdit, askMessages, citedNumbers, INFER, locateQuote, NOT_FOUND, splitEdits, verifyAnswer, type NoteEdit, type Turn, type Verified } from './ask';
 export { chunkNote, type Chunk } from './chunk';
 export { NoteEngine, type ChunkRecord, type ContextGroup, type Hit, type NoteSummary, type PinnedNote, type Scope, type Source } from './engine';
 export { KeywordIndex } from './keyword';
