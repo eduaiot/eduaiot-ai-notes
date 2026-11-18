@@ -1,15 +1,17 @@
-import { getAllTags, getLinkpath, normalizePath, TFile, TFolder } from 'obsidian';
-import { applyCuts, classifyMessages, parseClassify, sanitizePlan, cleanFolder, cleanTag, cleanTitle, DAY, findCuts, organizeMessages, parseNote, parseOrganize, parsePlan, planMessages, poorTitle, type Cut, type FolderSummary, type OrganizeInput, type PlanFolder } from './core';
+import { getAllTags, getLinkpath, normalizePath, Notice, TFile, TFolder } from 'obsidian';
+import { applyCuts, classifyMessages, parseClassify, sanitizePlan, cleanFolder, cleanTag, cleanTitle, DAY, findCuts, organizeMessages, parseNote, parseOrganize, parsePlan, planMessages, poorTitle, type Cut, type FolderSummary, type OrganizeInput, type OrganizeResult, type PlanFolder } from './core';
 import type AiNotesPlugin from './main';
 import { aiRoot, ensureFolder, inRoot, readState, sourceLink, stamp, today, writeState } from './store';
+import { message } from './backend';
 
-const BATCH = 5;
-const TEXT = 1500;
+const BATCH = 2;
+const TEXT = 1200;
 const RELATED = 5;
 const RECENT_DAYS = 7;
 export const RUN_LIMIT = 200;
-const CLASSIFY_BATCH = 10;
-const CLASSIFY_TEXT = 700;
+const CLASSIFY_BATCH = 5;
+const CLASSIFY_TEXT = 500;
+const GEN_TOKENS = 8000;
 export const ALL = '*';
 export const ROOT = '/';
 export const UNKNOWN = '未知';
@@ -205,7 +207,7 @@ export class Organizer {
     return this.state.suggestions;
   }
 
-  async generate(paths: string[], progress: (done: number, total: number) => void, scope = ALL): Promise<number> {
+  async generate(paths: string[], progress: (done: number, total: number) => void, scope = ALL, contentOnly = false): Promise<number> {
     await this.load();
     const local = this.plugin.local;
     if (!local.chatReady()) throw new Error('还没有设置好对话模型，请在插件设置里填写 API key');
@@ -214,59 +216,114 @@ export class Organizer {
     const queue = [...new Set(paths)].filter((path) => engine.has(path)).slice(0, RUN_LIMIT);
     const tags = this.vocabulary();
     const base = scope === ALL || scope === ROOT ? '' : scope;
-    const folders = this.targetFolders().filter((path) => !base || path === base || path.startsWith(`${base}/`));
+    const folders = contentOnly ? [] : this.targetFolders().filter((path) => !base || path === base || path.startsWith(`${base}/`));
     let made = 0;
+    let failed = 0;
+    let lastError: unknown = null;
     this.running = true;
+    const inputOf = (path: string, n: number): OrganizeInput => {
+      const file = this.app.vault.getFileByPath(path);
+      const group = engine.groups([path], null, TEXT)[0];
+      return {
+        n,
+        title: file?.basename ?? engine.title(path),
+        folder: folderOf(path),
+        tags: file ? this.tagsOf(file) : [],
+        text: (group?.texts.join('\n\n') ?? '').slice(0, TEXT),
+        related: engine.related(path, RELATED).map((hit, k) => ({ key: String.fromCharCode(97 + k), path: hit.path, title: hit.title }))
+      };
+    };
+    const apply = (path: string, result: OrganizeResult) => {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile)) return false;
+      const current = folderOf(path);
+      const existing = this.tagsOf(file);
+      const tagsToAdd = result.tags.filter((tag) => !existing.includes(tag));
+      const prev = this.state.suggestions.find((item) => item.path === path);
+      const keepMove = contentOnly && prev?.use.folder ? prev : null;
+      const suggestion: Suggestion = {
+        path,
+        mtime: file.stat.mtime,
+        summary: result.summary,
+        tags: tagsToAdd,
+        folder: keepMove ? keepMove.folder : current,
+        title: result.title && result.title !== file.basename ? result.title : '',
+        links: result.links.filter((link) => link !== path),
+        use: {
+          summary: !!result.summary,
+          tags: tagsToAdd.length > 0,
+          folder: keepMove ? true : false,
+          title: !!result.title && result.title !== file.basename,
+          links: result.links.length > 0
+        }
+      };
+      this.state.suggestions = [suggestion, ...this.state.suggestions.filter((item) => item.path !== path)];
+      return true;
+    };
+    const runBatch = async (batch: string[]): Promise<number> => {
+      const inputs = batch.map((path, n) => inputOf(path, n + 1));
+      try {
+        const results = parseOrganize(await local.complete(organizeMessages(inputs, tags, folders), GEN_TOKENS), inputs, folders);
+        let ok = 0;
+        batch.forEach((path, n) => {
+          const result = results.get(n + 1);
+          if (!result) return;
+          if (apply(path, result)) ok++;
+        });
+        if (ok) await this.save();
+        if (!ok && batch.length === 1) throw new Error('模型没有给出可用的整理建议');
+        if (!ok && batch.length > 1) {
+          let sum = 0;
+          for (const path of batch) sum += await runBatch([path]);
+          return sum;
+        }
+        return ok;
+      } catch (error) {
+        if (batch.length > 1 && tooLong(error)) {
+          let sum = 0;
+          for (const path of batch) sum += await runBatch([path]);
+          return sum;
+        }
+        throw error;
+      }
+    };
     try {
       for (let i = 0; i < queue.length; i += BATCH) {
         progress(i, queue.length);
         const batch = queue.slice(i, i + BATCH);
-        const inputs: OrganizeInput[] = batch.map((path, n) => {
-          const file = this.app.vault.getFileByPath(path);
-          const group = engine.groups([path], null, TEXT)[0];
-          return {
-            n: n + 1,
-            title: file?.basename ?? engine.title(path),
-            folder: folderOf(path),
-            tags: file ? this.tagsOf(file) : [],
-            text: (group?.texts.join('\n\n') ?? '').slice(0, TEXT),
-            related: engine.related(path, RELATED).map((hit, k) => ({ key: String.fromCharCode(97 + k), path: hit.path, title: hit.title }))
-          };
-        });
-        const results = parseOrganize(await local.complete(organizeMessages(inputs, tags, folders), 2500), inputs, folders);
-        batch.forEach((path, n) => {
-          const result = results.get(n + 1);
-          const file = this.app.vault.getAbstractFileByPath(path);
-          if (!result || !(file instanceof TFile)) return;
-          const current = folderOf(path);
-          const existing = this.tagsOf(file);
-          const tagsToAdd = result.tags.filter((tag) => !existing.includes(tag));
-          const suggestion: Suggestion = {
-            path,
-            mtime: file.stat.mtime,
-            summary: result.summary,
-            tags: tagsToAdd,
-            folder: result.folder || current,
-            title: result.title && result.title !== file.basename ? result.title : '',
-            links: result.links.filter((link) => link !== path),
-            use: {
-              summary: !!result.summary,
-              tags: tagsToAdd.length > 0,
-              folder: !!result.folder && result.folder !== current,
-              title: !!result.title && result.title !== file.basename,
-              links: result.links.length > 0
-            }
-          };
-          this.state.suggestions = [suggestion, ...this.state.suggestions.filter((item) => item.path !== path)];
-          made++;
-        });
-        await this.save();
+        try {
+          made += await runBatch(batch);
+        } catch (error) {
+          failed += batch.length;
+          lastError = error;
+        }
       }
       progress(queue.length, queue.length);
+      if (!made && lastError) throw lastError;
+      if (!made) throw new Error('没有生成任何内容建议');
+      if (failed) new Notice(`已生成 ${made} 条，另有 ${failed} 篇失败：${message(lastError)}`, 8000);
       return made;
     } finally {
       this.running = false;
     }
+  }
+
+  async clearFolderMoves(scope = ALL) {
+    await this.load();
+    const keep: Suggestion[] = [];
+    for (const item of this.state.suggestions) {
+      if (scope !== ALL) {
+        if (scope === ROOT ? item.path.includes('/') : !(item.path === scope || item.path.startsWith(`${scope}/`))) {
+          keep.push(item);
+          continue;
+        }
+      }
+      item.folder = folderOf(item.path);
+      item.use.folder = false;
+      if (item.use.summary || item.use.tags || item.use.title || item.use.links || item.summary || item.tags.length || item.title || item.links.length) keep.push(item);
+    }
+    this.state.suggestions = keep;
+    await this.save();
   }
 
   async apply(suggestion: Suggestion): Promise<string> {
@@ -291,11 +348,11 @@ export class Organizer {
         .map((target) => `- ${this.app.fileManager.generateMarkdownLink(target, file!.path)}`);
       if (lines.length) await this.app.vault.process(file, (text) => setLinks(text, lines));
     }
+    const before = file.path;
     const folder = use.folder ? suggestion.folder : folderOf(file.path);
     const name = use.title && cleanTitle(suggestion.title) ? cleanTitle(suggestion.title) : file.basename;
     const target = normalizePath(`${folder ? `${folder}/` : ''}${name}.md`);
     if (target !== file.path) {
-      const before = file.path;
       if (folder) await ensureFolder(this.app, folder);
       let next = target;
       for (let i = 2; this.app.vault.getAbstractFileByPath(next); i++) next = normalizePath(`${folder ? `${folder}/` : ''}${name}-${i}.md`);
@@ -303,8 +360,29 @@ export class Organizer {
       file = this.app.vault.getFileByPath(next) ?? file;
       this.record('move', before, next);
     }
-    this.state.suggestions = this.state.suggestions.filter((item) => item !== suggestion && item.path !== suggestion.path);
-    this.state.done = [...this.state.done.filter((path) => path !== suggestion.path), file.path].slice(-5000);
+    if (!(file instanceof TFile)) throw new Error('找不到这篇笔记，可能已经删除或改名');
+    const left: Suggestion = {
+      path: file.path,
+      mtime: file.stat.mtime,
+      summary: use.summary ? '' : suggestion.summary,
+      tags: use.tags ? [] : suggestion.tags,
+      folder: use.folder ? folderOf(file.path) : suggestion.folder,
+      title: use.title ? '' : suggestion.title,
+      links: use.links ? [] : suggestion.links,
+      use: {
+        summary: use.summary ? false : suggestion.use.summary,
+        tags: use.tags ? false : suggestion.use.tags,
+        folder: use.folder ? false : suggestion.use.folder,
+        title: use.title ? false : suggestion.use.title,
+        links: use.links ? false : suggestion.use.links
+      }
+    };
+    const still = Object.values(left.use).some(Boolean);
+    this.state.suggestions = [
+      ...(still ? [left] : []),
+      ...this.state.suggestions.filter((item) => item !== suggestion && item.path !== before && item.path !== file.path)
+    ];
+    this.state.done = [...this.state.done.filter((path) => path !== before && path !== file.path), file.path].slice(-5000);
     await this.save();
     return file.path;
   }
@@ -460,10 +538,11 @@ export class Organizer {
     return this.state.plan;
   }
 
-  async setPlan(plan: PlanFolder[] | null) {
+  async setPlan(plan: PlanFolder[] | null, clearMoves = false) {
     await this.load();
     this.state.plan = plan ? sanitizePlan(plan.map((folder) => ({ ...folder, path: cleanFolder(folder.path, 8) })).filter((folder) => folder.path)) : null;
     await this.save();
+    if (!plan && clearMoves) await this.clearFolderMoves(this.state.planScope || ALL);
   }
 
   async planScope(): Promise<string> {
@@ -527,7 +606,7 @@ export class Organizer {
           const body = engine.groups([path], null, CLASSIFY_TEXT)[0]?.texts.join('\n') ?? '';
           return { n: n + 1, title: engine.title(path), text: `${typeof summary === 'string' ? `摘要：${summary}\n` : ''}${body}`.slice(0, CLASSIFY_TEXT) };
         });
-        const picks = parseClassify(await local.complete(classifyMessages(plan, notes), 1200), notes.length, plan.length);
+        const picks = parseClassify(await local.complete(classifyMessages(plan, notes), 2500), notes.length, plan.length);
         batch.forEach((path, n) => {
           const pick = picks.get(n + 1);
           const file = this.app.vault.getAbstractFileByPath(path);
@@ -740,7 +819,7 @@ export class Organizer {
     return file;
   }
 
-  async map(): Promise<MapFolder> {
+  async map(scope = ALL): Promise<MapFolder> {
     await this.load();
     const plan = this.state.plan ?? [];
     const suggestions = new Map(this.state.suggestions.map((item) => [item.path, item]));
@@ -760,7 +839,7 @@ export class Organizer {
       }
       return at;
     };
-    for (const file of this.notes()) {
+    for (const file of this.filesIn(scope)) {
       const suggestion = suggestions.get(file.path);
       let folder = this.mapFolder(folderOf(file.path));
       if (suggestion?.use.folder) folder = this.mapFolder(suggestion.folder);
@@ -778,6 +857,11 @@ export class Organizer {
     count(root);
     return root;
   }
+}
+
+function tooLong(error: unknown): boolean {
+  const text = message(error);
+  return /输出过长|长度上限|思考太久|max.?tokens|context.?length/i.test(text);
 }
 
 function setLinks(text: string, lines: string[]): string {

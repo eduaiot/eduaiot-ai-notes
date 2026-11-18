@@ -1,9 +1,10 @@
-import { debounce, ItemView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
+import { debounce, ItemView, Notice, setIcon, TFile, WorkspaceLeaf } from 'obsidian';
 import { message } from './backend';
 import { confirmDialog } from './confirm';
 import type AiNotesPlugin from './main';
 import type { Cut } from './core';
 import { ALL, ROOT, RUN_LIMIT, type Health, type MapFolder, type Suggestion } from './organize';
+import type { PlanFolder } from './core';
 
 export const ORGANIZE_VIEW = 'eduaiot-ai-notes-organize';
 const SHOW = 50;
@@ -13,18 +14,38 @@ function folderOf(path: string) {
   return at < 0 ? '' : path.slice(0, at);
 }
 
+function isContentSuggestion(item: Suggestion) {
+  return item.use.summary || item.use.tags || item.use.title || item.use.links || !!item.summary || item.tags.length > 0 || !!item.title || item.links.length > 0;
+}
+
 export class OrganizeView extends ItemView {
   private health: Health | null = null;
   private expanded: string | null = null;
+  private stickyEl!: HTMLElement;
+  private stickyBusy!: HTMLElement;
+  private stickyLinks = new Map<string, HTMLAnchorElement>();
+  private stickyBadge2!: HTMLElement;
+  private stickyBadgeHealth!: HTMLElement;
+  private mapChanged = 0;
+  private healthIssues = 0;
+  private scopeEl!: HTMLElement;
+  private busyEl!: HTMLElement;
+  private contentElBox!: HTMLElement;
+  private contentHead!: HTMLElement;
+  private listBody!: HTMLElement;
+  private structureEl!: HTMLElement;
   private healthEl!: HTMLElement;
-  private statusEl!: HTMLElement;
-  private listEl!: HTMLElement;
-  private planEl!: HTMLElement;
-  private mapEl!: HTMLElement;
+  private cutEl!: HTMLElement;
+  private listOpen = false;
+  private planOpen = false;
+  private mapOpen: boolean | null = null;
   private onlyChanged = true;
+  private structureStep: 0 | 1 | 2 | 3 = 0;
+  private structureActive = false;
+  private contentCount = 0;
   private readonly persist = debounce(() => {
     void this.plugin.organizer.persist();
-    void this.renderMap();
+    void this.renderStructure();
   }, 600, true);
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: AiNotesPlugin) {
@@ -47,127 +68,321 @@ export class OrganizeView extends ItemView {
     const root = this.contentEl;
     root.empty();
     root.addClass('eai-organize');
-    const head = root.createDiv({ cls: 'eai-head' });
-    head.createEl('h4', { text: '整理笔记' });
-    head.createEl('button', { text: '重新体检' }).onclick = () => this.refresh();
-    root.createEl('p', {
-      cls: 'eai-hint',
-      text: 'AI 只给建议，你确认后才会写入。能写入的只有：属性里的摘要和标签、移动到别的文件夹、改标题、文末的「相关笔记」双链，正文不会被改动。'
-    });
-    this.healthEl = root.createDiv();
-    this.planEl = root.createDiv({ cls: 'eai-section' });
-    this.statusEl = root.createDiv({ cls: 'eai-meta' });
-    this.listEl = root.createDiv({ cls: 'eai-section' });
-    this.mapEl = root.createDiv({ cls: 'eai-section' });
-    this.renderCut(root.createDiv({ cls: 'eai-section' }));
+    this.stickyEl = root.createDiv({ cls: 'eai-sticky is-hidden' });
+    this.renderStickyNav();
+    const head = root.createDiv({ cls: 'eai-page-head' });
+    head.createEl('h4', { text: '易度笔记助手' });
+    head.createEl('p', { cls: 'eai-hint', text: '先补笔记信息，再做分类（当然也可以不补）' });
+    this.busyEl = root.createDiv({ cls: 'eai-busy' });
+    this.scopeEl = root.createDiv({ cls: 'eai-mod eai-mod-compact' });
+    this.scopeEl.id = 'eai-scope';
+    const flow = root.createDiv({ cls: 'eai-flow-label' });
+    flow.createSpan({ text: '整理流程' });
+    flow.createSpan({ cls: 'eai-meta', text: '按顺序做，第 1 步可跳过' });
+    this.contentElBox = root.createDiv({ cls: 'eai-mod' });
+    this.contentElBox.id = 'eai-step1';
+    this.contentHead = this.contentElBox.createDiv({ cls: 'eai-mod-head' });
+    this.listBody = this.contentElBox.createDiv({ cls: 'eai-mod-body' });
+    this.structureEl = root.createDiv({ cls: 'eai-mod' });
+    this.structureEl.id = 'eai-step2';
+    this.healthEl = root.createDiv({ cls: 'eai-mod eai-mod-compact' });
+    this.healthEl.id = 'eai-health';
+    this.cutEl = root.createEl('details', { cls: 'eai-mod eai-mod-danger eai-mod-compact' });
+    this.cutEl.id = 'eai-cut';
+    this.renderCut(this.cutEl);
+    this.renderScope();
+    this.renderContentHead();
+    const scroller = (this.contentEl.closest('.view-content') as HTMLElement | null) ?? this.contentEl;
+    this.registerDomEvent(scroller, 'scroll', () => this.updateSticky(scroller));
     await this.refresh();
+  }
+
+  private renderStickyNav() {
+    this.stickyEl.empty();
+    this.stickyLinks.clear();
+    const nav = this.stickyEl.createDiv({ cls: 'eai-sticky-nav' });
+    for (const [id, label] of [
+      ['eai-scope', '范围'],
+      ['eai-step1', '补全笔记信息'],
+      ['eai-step2', '整理分类'],
+      ['eai-health', '诊断'],
+      ['eai-cut', '批量删除']
+    ] as const) {
+      const a = nav.createEl('a', { href: '#' });
+      a.dataset.target = id;
+      a.createSpan({ text: label });
+      if (id === 'eai-step2') {
+        this.stickyBadge2 = a.createSpan({ cls: 'eai-nbadge is-hidden' });
+      }
+      if (id === 'eai-health') {
+        this.stickyBadgeHealth = a.createSpan({ cls: 'eai-nbadge is-amber is-hidden' });
+      }
+      a.onclick = (event) => {
+        event.preventDefault();
+        this.setStickyActive(id);
+        this.contentEl.querySelector(`#${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+      this.stickyLinks.set(id, a);
+    }
+    this.stickyBusy = this.stickyEl.createDiv({ cls: 'eai-sticky-busy is-hidden' });
+    this.refreshStickyBadges();
+  }
+
+  private setStickyActive(active: string) {
+    for (const [id, link] of this.stickyLinks) {
+      const on = id === active;
+      link.toggleClass('is-active', on);
+      if (on) link.setAttribute('aria-current', 'true');
+      else link.removeAttribute('aria-current');
+    }
+  }
+
+  private refreshStickyBadges() {
+    if (this.stickyBadge2) {
+      const show = this.mapChanged > 0;
+      this.stickyBadge2.toggleClass('is-hidden', !show);
+      this.stickyBadge2.setText(show ? `${this.mapChanged} 处变化` : '');
+    }
+    if (this.stickyBadgeHealth) {
+      const show = this.healthIssues > 0;
+      this.stickyBadgeHealth.toggleClass('is-hidden', !show);
+      this.stickyBadgeHealth.setText(show ? String(this.healthIssues) : '');
+    }
+  }
+
+  private updateSticky(scroller: HTMLElement) {
+    const show = scroller.scrollTop > 48;
+    this.stickyEl.toggleClass('is-hidden', !show);
+    if (!show) return;
+    const ids = ['eai-scope', 'eai-step1', 'eai-step2', 'eai-health', 'eai-cut'];
+    const stickyH = Math.max(40, this.stickyEl.getBoundingClientRect().height);
+    const top = scroller.getBoundingClientRect().top + stickyH + 12;
+    let active = ids[0]!;
+    for (const id of ids) {
+      const el = this.contentEl.querySelector(`#${id}`);
+      if (!(el instanceof HTMLElement)) continue;
+      if (el.getBoundingClientRect().top <= top) active = id;
+    }
+    this.setStickyActive(active);
+  }
+
+  private setBusy(text: string | null) {
+    this.contentEl.toggleClass('is-working', !!text);
+    this.busyEl.toggleClass('is-on', !!text);
+    this.busyEl.setText(text ?? '');
+    this.stickyBusy.toggleClass('is-hidden', !text);
+    this.stickyBusy.setText(text ?? '');
+    if (text) {
+      this.stickyEl.removeClass('is-hidden');
+      this.busyEl.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  private modIcon(parent: HTMLElement, icon: string, tone: string) {
+    const wrap = parent.createDiv({ cls: `eai-mod-ic ${tone}` });
+    setIcon(wrap, icon);
+    return wrap;
+  }
+
+  private confirm(heading: string, text: string, action?: string) {
+    return confirmDialog(this.app, heading, text, action, this.containerEl);
   }
 
   private scopes(): [string, string][] {
     return [[ALL, '全部笔记（整个笔记库）'], [ROOT, '根目录下的笔记（不含子文件夹）'], ...this.plugin.organizer.folders().map((folder): [string, string] => [folder, folder])];
   }
 
+  private inScope(path: string, scope = this.currentScope()): boolean {
+    if (scope === ALL) return true;
+    if (scope === ROOT) return !path.includes('/');
+    return path === scope || path.startsWith(`${scope}/`);
+  }
+
+  private renderScope() {
+    const box = this.scopeEl;
+    box.empty();
+    const head = box.createDiv({ cls: 'eai-mod-head' });
+    this.modIcon(head, 'crosshair', 'is-slate');
+    const info = head.createDiv({ cls: 'eai-mod-text' });
+    info.createEl('h5', { text: '选择范围' });
+    info.createEl('p', { cls: 'eai-hint', text: '下面所有操作只作用于这个范围' });
+    const row = head.createDiv({ cls: 'eai-actions' });
+    const select = row.createEl('select', { cls: 'dropdown' });
+    const scopes = this.scopes();
+    for (const [value, label] of scopes) select.createEl('option', { text: label, value });
+    if (scopes.some(([value]) => value === this.plugin.settings.organizeFolder)) select.value = this.plugin.settings.organizeFolder;
+    const count = this.plugin.organizer.filesIn(select.value).length;
+    row.createSpan({ cls: 'eai-scope-count', text: `${count} 篇` });
+    select.onchange = () => {
+      this.plugin.settings.organizeFolder = select.value;
+      void this.plugin.saveData(this.plugin.settings);
+      this.expanded = null;
+      if (this.health) this.renderHealth();
+      void this.renderStructure();
+      void this.renderList();
+      this.renderScope();
+    };
+  }
+
+  private renderContentHead() {
+    const box = this.contentHead;
+    box.empty();
+    this.contentElBox.toggleClass('is-current', !this.structureActive);
+    this.modIcon(box, 'sparkles', 'is-blue');
+    const text = box.createDiv({ cls: 'eai-mod-text' });
+    const title = text.createDiv({ cls: 'eai-mod-title-row' });
+    const badge = title.createSpan({ cls: `eai-step-badge${this.structureActive ? '' : ' is-current'}` });
+    badge.setText(this.structureActive ? '第 1 步' : this.contentCount ? '第 1 步 · 有建议' : '第 1 步 · 当前');
+    title.createEl('h5', { text: '补全笔记信息' });
+    title.createSpan({ cls: 'eai-tag', text: '可跳过' });
+    text.createEl('p', { cls: 'eai-hint', text: '请补充笔记的摘要、标签、标题等相关信息。' });
+    box.createDiv({ cls: 'eai-actions' }).createEl('button', {
+      cls: 'mod-cta',
+      text: this.contentCount ? '重新生成' : '生成内容建议'
+    }).onclick = () => {
+      const scope = this.currentScope();
+      void this.run(this.plugin.organizer.notesIn(scope), this.scopeLabel(scope), scope);
+    };
+  }
+
   private renderCut(box: HTMLElement) {
     const settings = this.plugin.settings;
-    box.createEl('h5', { text: '批量删除段落' });
-    box.createEl('p', { cls: 'eai-hint', text: '删除每篇笔记里从「开始行」到「结束行」的一段，开始行和结束行本身也会删掉。只需要填这一行里一定会出现的几个字，比如结束行日期每篇都不同，就填「EduAIoT 第二大脑」；* _ 这类格式符号会自动忽略。先查找预览，确认后才删除。' });
-    const form = box.createDiv({ cls: 'eai-cut-form' });
-    const start = form.createEl('input', { type: 'text', value: settings.cutStart, attr: { placeholder: '开始行包含的文字，比如：与我相关' } });
-    const end = form.createEl('input', { type: 'text', value: settings.cutEnd, attr: { placeholder: '结束行包含的文字，比如：EduAIoT 第二大脑' } });
-    const options = box.createDiv({ cls: 'eai-actions eai-folder-run' });
-    const label = options.createEl('label', { cls: 'eai-current' });
-    const heading = label.createEl('input', { type: 'checkbox' });
-    heading.checked = settings.cutHeading;
-    label.createSpan({ text: '开始行必须是标题' });
-    const scope = options.createEl('select', { cls: 'dropdown' });
+    box.empty();
+    const summary = box.createEl('summary', { cls: 'eai-mod-head' });
+    this.modIcon(summary, 'trash', 'is-red');
+    const text = summary.createDiv({ cls: 'eai-mod-text' });
+    const title = text.createDiv({ cls: 'eai-mod-title-row' });
+    title.createEl('h5', { text: '批量删除段落' });
+    title.createSpan({ cls: 'eai-tag is-danger', text: '危险操作' });
+    text.createEl('p', { cls: 'eai-hint', text: '按开始行 / 结束行删掉一整段，先预览再确认；删除后需从回收站恢复' });
+    const toggle = summary.createSpan({ cls: 'eai-toggle-txt' });
+    toggle.createSpan({ cls: 'eai-when-closed', text: '展开' });
+    toggle.createSpan({ cls: 'eai-when-open', text: '收起' });
+    toggle.createSpan({ cls: 'eai-chev' });
+    const body = box.createDiv({ cls: 'eai-mod-body' });
+    body.createEl('p', { cls: 'eai-hint', text: '删掉从「开始行」到「结束行」的一整段（包括这两行）。只需填行里一定会出现的几个字，格式符号会被忽略。' });
+    const form = body.createDiv({ cls: 'eai-cut-form' });
+    const startField = form.createDiv();
+    startField.createEl('label', { cls: 'eai-lbl', text: '开始行' });
+    const start = startField.createEl('input', { type: 'text', value: '', attr: { placeholder: '例如：与我相关' } });
+    const endField = form.createDiv();
+    endField.createEl('label', { cls: 'eai-lbl', text: '结束行' });
+    const end = endField.createEl('input', { type: 'text', value: '', attr: { placeholder: '例如：EduAIoT 第二大脑' } });
+    const scopeField = form.createDiv();
+    scopeField.createEl('label', { cls: 'eai-lbl', text: '在哪些笔记里找' });
+    const scope = scopeField.createEl('select', { cls: 'dropdown' });
+    const current = this.currentScope();
     const scopes = this.scopes();
-    for (const [value, text] of scopes) scope.createEl('option', { text, value });
+    for (const [value, label] of scopes) {
+      const count = this.plugin.organizer.filesIn(value).length;
+      const text = value === current ? `当前范围：${label}（${count} 篇）` : label;
+      scope.createEl('option', { text, value });
+    }
     if (scopes.some(([value]) => value === settings.cutScope)) scope.value = settings.cutScope;
-    const result = box.createDiv();
+    else if (scopes.some(([value]) => value === current)) scope.value = current;
+    const headingField = form.createDiv({ cls: 'eai-cut-check' });
+    const headingLabel = headingField.createEl('label', { cls: 'eai-chk' });
+    const heading = headingLabel.createEl('input', { type: 'checkbox' });
+    heading.checked = settings.cutHeading;
+    headingLabel.createSpan({ text: '开始行必须是标题' });
+    const warn = body.createDiv({ cls: 'eai-cut-warn is-hidden' });
+    warn.createSpan({ text: '你选的是整个笔记库，不只是上面的当前范围。请先预览，确认命中的每一篇都该删。' });
+    const syncWarn = () => warn.toggleClass('is-hidden', scope.value !== ALL || current === ALL);
+    syncWarn();
+    scope.onchange = () => syncWarn();
+    const actions = body.createDiv({ cls: 'eai-cut-actions' });
+    const preview = actions.createEl('button', { text: '先预览' });
+    actions.createSpan({ cls: 'eai-meta', text: '预览不会删除任何内容' });
+    const result = body.createDiv({ cls: 'eai-cut-hits is-hidden' });
     const remember = () => {
-      settings.cutStart = start.value.trim();
-      settings.cutEnd = end.value.trim();
+      settings.cutStart = '';
+      settings.cutEnd = '';
       settings.cutHeading = heading.checked;
       settings.cutScope = scope.value;
       void this.plugin.saveData(settings);
     };
-    options.createEl('button', { cls: 'mod-cta', text: '查找' }).onclick = async () => {
+    preview.onclick = async () => {
       remember();
-      if (!settings.cutStart || !settings.cutEnd) {
+      const startText = start.value.trim();
+      const endText = end.value.trim();
+      if (!startText || !endText) {
         new Notice('开始和结束都要填');
         return;
       }
+      preview.setText('查找中…');
+      preview.disabled = true;
       result.empty();
-      result.createEl('p', { cls: 'eai-hint', text: '正在查找…' });
-      const found = await this.plugin.organizer.previewCuts(settings.cutScope, settings.cutStart, settings.cutEnd, settings.cutHeading);
-      this.renderCutResult(result, found, settings.cutStart, settings.cutEnd, settings.cutHeading);
+      result.addClass('is-hidden');
+      try {
+        const found = await this.plugin.organizer.previewCuts(settings.cutScope, startText, endText, settings.cutHeading);
+        this.renderCutResult(result, found, startText, endText, settings.cutHeading);
+      } finally {
+        preview.setText('先预览');
+        preview.disabled = false;
+      }
     };
   }
 
   private renderCutResult(box: HTMLElement, found: { path: string; cuts: Cut[] }[], start: string, end: string, headingOnly: boolean) {
     box.empty();
+    box.removeClass('is-hidden');
     if (!found.length) {
       box.createEl('p', { cls: 'eai-hint', text: '没有找到同时有开始行和结束行的笔记。可以试试少填几个字，或者取消「开始行必须是标题」。' });
       return;
     }
-    const chosen = new Set(found.map((item) => item.path));
-    const head = box.createDiv({ cls: 'eai-head' });
-    head.createEl('h5', { text: `找到 ${found.length} 篇，共 ${found.reduce((sum, item) => sum + item.cuts.length, 0)} 段` });
-    const run = head.createEl('button', { cls: 'mod-warning' });
-    const update = () => {
-      run.setText(`删除选中的（${chosen.size} 篇）`);
-      run.disabled = !chosen.size;
-    };
+    const segments = found.reduce((sum, item) => sum + item.cuts.length, 0);
+    const lines = found.reduce((sum, item) => sum + item.cuts.reduce((n, cut) => n + cut.lines, 0), 0);
+    const title = box.createDiv({ cls: 'eai-cut-hits-title' });
+    title.createEl('b', { text: `找到 ${segments} 段，分布在 ${found.length} 篇笔记里` });
+    title.createSpan({ cls: 'eai-meta', text: `（共约 ${lines} 行）` });
+    const list = box.createEl('ul', { cls: 'eai-cut-hits-list' });
     for (const item of found) {
-      const card = box.createDiv({ cls: 'eai-card' });
-      const top = card.createEl('label', { cls: 'eai-current' });
-      const check = top.createEl('input', { type: 'checkbox' });
-      check.checked = true;
-      check.onchange = () => {
-        if (check.checked) chosen.add(item.path);
-        else chosen.delete(item.path);
-        update();
-      };
-      const link = top.createEl('a', { cls: 'eai-link', text: item.path.replace(/\.md$/i, ''), href: '#' });
-      link.onclick = (event) => {
-        event.preventDefault();
-        void this.plugin.openNote(item.path, '', item.cuts[0]!.from, true);
-      };
       for (const cut of item.cuts) {
-        const block = card.createDiv({ cls: 'eai-cut-block' });
-        block.createDiv({ cls: 'eai-meta', text: `第 ${cut.from + 1}–${cut.to + 1} 行，共 ${cut.lines} 行` });
-        block.createDiv({ cls: 'eai-cut-line', text: cut.first });
-        if (cut.lines > 2) block.createDiv({ cls: 'eai-meta', text: `……中间 ${cut.lines - 2} 行……` });
-        if (cut.lines > 1) block.createDiv({ cls: 'eai-cut-line', text: cut.last });
+        const row = list.createEl('li');
+        const link = row.createEl('a', { cls: 'eai-link', text: item.path.replace(/\.md$/i, ''), href: '#' });
+        link.onclick = (event) => {
+          event.preventDefault();
+          void this.plugin.openNote(item.path, '', cut.from, true);
+        };
+        row.createSpan({ text: ` · 第 ${cut.from + 1}–${cut.to + 1} 行` });
       }
     }
+    const actions = box.createDiv({ cls: 'eai-cut-actions' });
+    const run = actions.createEl('button', { cls: 'eai-btn-danger-outline', text: `删除这 ${segments} 段…` });
+    actions.createSpan({ cls: 'eai-meta', text: '下一步还会再确认一次' });
     run.onclick = async () => {
-      if (!(await confirmDialog(this.app, '批量删除段落', `从 ${chosen.size} 篇笔记里删除上面列出的段落？删除后会生成一篇整理记录。建议先确认笔记有备份或同步。`, '删除'))) return;
+      if (!(await this.confirm(
+        '确认删除？',
+        `将在 ${found.length} 篇笔记中删除从「${start}」到「${end}」的段落（共 ${segments} 段）。删除后只能从回收站或历史版本恢复。`,
+        `删除 ${segments} 段`
+      ))) return;
       let notes = 0;
-      let lines = 0;
-      for (const path of chosen) {
+      let removedLines = 0;
+      for (const item of found) {
         try {
-          const removed = await this.plugin.organizer.cut(path, start, end, headingOnly);
+          const removed = await this.plugin.organizer.cut(item.path, start, end, headingOnly);
           if (removed) {
             notes++;
-            lines += removed;
+            removedLines += removed;
           }
         } catch (error) {
-          new Notice(`「${path}」删除失败：${message(error)}`, 8000);
+          new Notice(`「${item.path}」删除失败：${message(error)}`, 8000);
         }
       }
-      new Notice(`已从 ${notes} 篇笔记里删除 ${lines} 行`);
+      new Notice(`已从 ${notes} 篇笔记里删除 ${removedLines} 行`);
       const record = await this.plugin.organizer.writeRecord();
       if (record) await this.plugin.openNote(record.path, '', -1, true);
       box.empty();
+      box.createSpan({ cls: 'eai-tag is-ok', text: `已删除 ${segments} 段` });
       await this.refresh();
     };
-    update();
   }
 
   async refresh() {
+    this.renderScope();
+    this.renderContentHead();
     this.healthEl.empty();
-    this.healthEl.createEl('p', { cls: 'eai-hint', text: '正在体检…' });
+    this.healthEl.createEl('p', { cls: 'eai-hint', text: '正在诊断…' });
     try {
       this.health = await this.plugin.organizer.health();
       this.renderHealth();
@@ -175,8 +390,8 @@ export class OrganizeView extends ItemView {
       this.healthEl.empty();
       this.healthEl.createEl('p', { cls: 'eai-error', text: message(error) });
     }
-    await this.renderPlan();
     await this.renderList();
+    await this.renderStructure();
   }
 
   private link(parent: HTMLElement, path: string) {
@@ -189,121 +404,243 @@ export class OrganizeView extends ItemView {
   }
 
   private renderHealth() {
-    const health = this.health!;
+    const full = this.health!;
+    const scope = this.currentScope();
+    const recent = full.recent.filter((path) => this.inScope(path, scope));
+    const untagged = full.untagged.filter((path) => this.inScope(path, scope));
+    const orphans = full.orphans.filter((path) => this.inScope(path, scope));
+    const poor = full.poor.filter((path) => this.inScope(path, scope));
+    const empty = full.empty.filter((path) => this.inScope(path, scope));
+    const duplicates = full.duplicates.filter((group) => group.some((path) => this.inScope(path, scope)));
+    const emptyFolders = full.emptyFolders.filter((path) => this.inScope(path, scope));
+    const total = this.plugin.organizer.filesIn(scope).length;
+    const issues = [
+      recent.length > 0,
+      untagged.length > 0,
+      orphans.length > 0,
+      poor.length > 0,
+      empty.length > 0,
+      duplicates.length > 0,
+      emptyFolders.length > 0
+    ].filter(Boolean).length;
+    this.healthIssues = issues;
+    this.refreshStickyBadges();
     const box = this.healthEl;
     box.empty();
-    box.createEl('h5', { text: `笔记体检：共 ${health.total} 篇` });
-    const grid = box.createDiv({ cls: 'eai-grid eai-health' });
-    const card = (key: string, label: string, desc: string, paths: string[], canRun: boolean) => {
-      const item = grid.createDiv({ cls: `eai-card${paths.length ? '' : ' is-done'}` });
-      item.createDiv({ cls: 'eai-health-count', text: String(paths.length) });
-      item.createDiv({ cls: 'eai-link', text: label });
-      item.createDiv({ cls: 'eai-meta', text: desc });
-      if (!paths.length) return;
-      const actions = item.createDiv({ cls: 'eai-actions' });
+    const head = box.createDiv({ cls: 'eai-mod-head' });
+    this.modIcon(head, 'activity', 'is-teal');
+    const info = head.createDiv({ cls: 'eai-mod-text' });
+    info.createEl('h5', { text: '笔记诊断' });
+    info.createEl('p', { cls: 'eai-hint', text: `${this.scopeLabel(scope)} · 共 ${total} 篇` });
+    if (issues) head.createSpan({ cls: 'eai-tag is-warn', text: `${issues} 项待处理` });
+    else head.createSpan({ cls: 'eai-tag is-ok', text: '暂无问题' });
+    const body = box.createDiv({ cls: 'eai-mod-body' });
+    const grid = body.createDiv({ cls: 'eai-stat-grid' });
+    const card = (key: string, label: string, count: number, canRun: boolean, danger = false) => {
+      const item = grid.createDiv({ cls: count ? `eai-stat is-issue` : 'eai-stat is-zero' });
+      const top = item.createDiv({ cls: 'eai-stat-top' });
+      top.createSpan({ cls: 'eai-stat-n', text: String(count) });
+      top.createSpan({ text: label });
+      if (!count) return;
+      const actions = item.createDiv({ cls: 'eai-actions eai-stat-acts' });
       actions.createEl('button', { text: this.expanded === key ? '收起' : '查看' }).onclick = () => {
         this.expanded = this.expanded === key ? null : key;
         this.renderHealth();
       };
-      if (canRun) actions.createEl('button', { cls: 'mod-cta', text: '整理这些' }).onclick = () => this.run(paths, label, ALL);
+      if (canRun) actions.createEl('button', { text: '补全这些' }).onclick = () => this.run(
+        key === 'recent' ? recent : key === 'untagged' ? untagged : key === 'orphans' ? orphans : poor,
+        label,
+        scope
+      );
+      if (danger) actions.createEl('button', { cls: 'mod-warning', text: '全部删除' }).onclick = async () => {
+        if (!(await this.confirm('删除空文件夹', `删除这 ${emptyFolders.length} 个空文件夹？${emptyFolders.slice(0, 8).join('、')}${emptyFolders.length > 8 ? ' 等' : ''}`, '删除'))) return;
+        await this.act(() => this.plugin.organizer.removeFolders(emptyFolders), '已删除空文件夹');
+      };
     };
-    card('recent', '最近 7 天的新笔记', '还没有标签和摘要', health.recent, true);
-    card('untagged', '没有标签', '找的时候容易漏掉', health.untagged, true);
-    card('orphans', '孤立笔记', '和你的其他笔记没有任何双链往来', health.orphans, true);
-    card('poor', '标题看不出内容', '未命名、纯日期等', health.poor, true);
-    card('empty', '空笔记', '没有文字、图片、视频等任何内容', health.empty, false);
-    const dup = grid.createDiv({ cls: `eai-card${health.duplicates.length ? '' : ' is-done'}` });
-    dup.createDiv({ cls: 'eai-health-count', text: String(health.duplicates.length) });
-    dup.createDiv({ cls: 'eai-link', text: '重复笔记' });
-    dup.createDiv({ cls: 'eai-meta', text: '内容几乎一样的几组' });
-    const folders = grid.createDiv({ cls: `eai-card${health.emptyFolders.length ? '' : ' is-done'}` });
-    folders.createDiv({ cls: 'eai-health-count', text: String(health.emptyFolders.length) });
-    folders.createDiv({ cls: 'eai-link', text: '空文件夹' });
-    folders.createDiv({ cls: 'eai-meta', text: '里面没有任何文件' });
-    if (health.emptyFolders.length) {
-      const actions = folders.createDiv({ cls: 'eai-actions' });
-      actions.createEl('button', { text: this.expanded === 'folders' ? '收起' : '查看' }).onclick = () => {
-        this.expanded = this.expanded === 'folders' ? null : 'folders';
-        this.renderHealth();
-      };
-      actions.createEl('button', { cls: 'mod-warning', text: '全部删除' }).onclick = async () => {
-        if (!(await confirmDialog(this.app, '删除空文件夹', `删除这 ${health.emptyFolders.length} 个空文件夹？${health.emptyFolders.slice(0, 8).join('、')}${health.emptyFolders.length > 8 ? ' 等' : ''}`, '删除'))) return;
-        await this.act(() => this.plugin.organizer.removeFolders(health.emptyFolders), '已删除空文件夹');
-      };
-    }
-    if (health.duplicates.length) {
-      dup.createDiv({ cls: 'eai-actions' }).createEl('button', { text: this.expanded === 'dup' ? '收起' : '查看' }).onclick = () => {
-        this.expanded = this.expanded === 'dup' ? null : 'dup';
-        this.renderHealth();
-      };
-    }
-    const lists: Record<string, string[]> = { recent: health.recent, untagged: health.untagged, orphans: health.orphans, poor: health.poor, empty: health.empty };
+    card('recent', '最近 7 天的新笔记', recent.length, true);
+    card('untagged', '没有标签', untagged.length, true);
+    card('orphans', '孤立笔记', orphans.length, true);
+    card('poor', '标题看不出内容', poor.length, true);
+    card('empty', '空笔记', empty.length, false);
+    card('dup', '重复笔记', duplicates.length, false);
+    card('folders', '空文件夹', emptyFolders.length, false, true);
+    const lists: Record<string, string[]> = { recent, untagged, orphans, poor, empty };
     if (this.expanded === 'folders') {
-      const list = box.createDiv({ cls: 'eai-sources' });
-      for (const path of health.emptyFolders) list.createDiv({ text: `📁 ${path}` });
+      const list = body.createDiv({ cls: 'eai-sources' });
+      for (const path of emptyFolders) list.createDiv({ text: `📁 ${path}` });
     } else if (this.expanded && this.expanded !== 'dup') {
-      const list = box.createDiv({ cls: 'eai-sources' });
+      const list = body.createDiv({ cls: 'eai-sources' });
       const paths = lists[this.expanded] ?? [];
       paths.slice(0, SHOW).forEach((path) => this.link(list, path));
       if (paths.length > SHOW) list.createDiv({ cls: 'eai-meta', text: `……还有 ${paths.length - SHOW} 篇` });
     }
     if (this.expanded === 'dup') {
-      const list = box.createDiv();
-      list.createEl('p', { cls: 'eai-hint', text: '选一篇保留。删除和合并都会把其他几篇移到回收站，指向它们的双链会自动改成指向保留的这篇。合并会把其他几篇的正文和标签追加到保留的这篇末尾，正文完全一样的不重复追加。' });
-      health.duplicates.slice(0, SHOW).forEach((group, i) => this.renderDuplicate(list, group, i));
+      const list = body.createDiv();
+      list.createEl('p', { cls: 'eai-hint', text: '选一篇保留。其他进回收站；原来点到它们的链接会改指这篇。合并会把其他篇的正文和标签接到这篇后面（相同正文不重复贴）。' });
+      duplicates.slice(0, SHOW).forEach((group, i) => this.renderDuplicate(list, group, i));
     }
-    const row = box.createDiv({ cls: 'eai-actions eai-folder-run' });
-    row.createSpan({ text: '按范围整理：' });
-    const select = row.createEl('select', { cls: 'dropdown' });
-    const scopes = this.scopes();
-    for (const [value, text] of scopes) select.createEl('option', { text, value });
-    if (scopes.some(([value]) => value === this.plugin.settings.organizeFolder)) select.value = this.plugin.settings.organizeFolder;
-    const remember = () => {
-      this.plugin.settings.organizeFolder = select.value;
-      void this.plugin.saveData(this.plugin.settings);
-    };
-    select.onchange = () => {
-      remember();
-      void this.renderPlan();
-    };
-    row.createEl('button', { text: '整理这个范围' }).onclick = () => {
-      remember();
-      void this.run(this.plugin.organizer.notesIn(select.value), this.scopeLabel(select.value), select.value);
-    };
   }
 
-  private async renderPlan() {
-    const box = this.planEl;
-    box.empty();
-    const plan = await this.plugin.organizer.plan();
-    const head = box.createDiv({ cls: 'eai-head' });
-    const current = this.currentScope();
-    const planScope = await this.plugin.organizer.planScope();
-    head.createEl('h5', { text: `分类方案（范围：${this.scopeLabel(plan ? planScope : current)}）` });
-    if (!plan) {
-      box.createEl('p', { cls: 'eai-hint', text: current === ALL || current === ROOT
-        ? '想调整文件夹结构（改名、合并、新建分类）时，先让 AI 设计一套方案。确认方案后再生成整理建议，每篇笔记会按新的分类来分配。不需要调整的话可以跳过这一步。想只整理某个文件夹，先在上面「按范围整理」里选中它。'
-        : `AI 会只在「${current}」里面设计子分类，比如按主题分成几个子文件夹。确认后点上面的「整理这个范围」，「${current}」里的每篇笔记会按这些子分类来分配。` });
-      head.createEl('button', { cls: 'mod-cta', text: '让 AI 设计分类方案' }).onclick = () => this.designPlan();
+  private async runStructure() {
+    if (this.plugin.organizer.running) {
+      new Notice('正在处理，请稍等');
       return;
     }
-    if (planScope !== current) box.createEl('p', { cls: 'eai-warn', text: `当前方案是按「${this.scopeLabel(planScope)}」设计的，上面选的是「${this.scopeLabel(current)}」。要按新范围设计，点「重新设计」。` });
-    const tools = head.createDiv({ cls: 'eai-actions' });
-    tools.createEl('button', { text: '重新设计' }).onclick = () => this.designPlan();
-    tools.createEl('button', { text: '放弃方案' }).onclick = async () => {
-      await this.plugin.organizer.setPlan(null);
-      await this.renderPlan();
-      await this.renderMap();
-    };
-    if (plan.some((folder) => folder.from.some((from) => from !== folder.path))) tools.createEl('button', { text: '只执行文件夹改名和合并' }).onclick = () => this.runPlan();
-    tools.createEl('button', { cls: 'mod-cta', text: '按内容把笔记分进这些分类' }).onclick = () => this.classify();
-    box.createEl('p', { cls: 'eai-hint', text: '可以直接改分类名，或删掉不要的。点「按内容把笔记分进这些分类」，AI 会逐篇阅读笔记，按正文主要讲什么给每篇选一个最合适的分类；结果先出现在下面的笔记地图里，确认后点「按地图全部执行」。没有分到笔记的分类不会建文件夹。' });
+    if (!this.plugin.local.chatReady()) {
+      new Notice('还没有设置好对话模型，请在插件设置里填写 API key');
+      return;
+    }
+    const scope = this.currentScope();
+    const count = Math.min(this.plugin.organizer.notesIn(scope).length, RUN_LIMIT);
+    if (!count) {
+      new Notice('这个范围里没有可以整理的笔记');
+      return;
+    }
+    const scopeText = scope === ALL || scope === ROOT
+      ? 'AI 会设计一套文件夹结构，再把笔记分进去。'
+      : `AI 会只在「${scope}」里设计子分类，再把笔记分进去。`;
+    const missing = this.plugin.organizer.notesIn(scope).filter((path) => {
+      const file = this.app.vault.getFileByPath(path);
+      const summary = file ? this.app.metadataCache.getFileCache(file)?.frontmatter?.summary : undefined;
+      return typeof summary !== 'string' || !summary.trim();
+    }).length;
+    const tip = missing > 0
+      ? `\n\n当前约有 ${Math.min(missing, count)} 篇还没有摘要。建议先做①生成并应用内容建议，分类会更准；也可以直接继续。`
+      : '';
+    if (!(await this.confirm(
+      '整理文件夹',
+      `${scopeText}大约先调用 1 次设计分类，再调用约 ${Math.ceil(count / 5)} 次分配笔记。只会生成预览，确认前不改库。${tip}`,
+      missing > 0 ? '仍要继续' : '开始整理'
+    ))) return;
+
+    this.structureStep = 1;
+    this.planOpen = false;
+    this.setBusy('① 正在设计文件夹结构…');
+    this.structureEl.scrollIntoView({ block: 'nearest' });
+    try {
+      await this.plugin.organizer.generatePlan(scope);
+      this.structureStep = 2;
+      this.setBusy(`② 正在把笔记分进分类：0/${count}…`);
+      const result = await this.plugin.organizer.classify((done, total) => {
+        this.setBusy(done < total ? `② 正在把笔记分进分类：${done}/${total}…` : '② 正在整理分类结果…');
+      });
+      this.structureStep = 3;
+      this.mapOpen = true;
+      new Notice(`结构已就绪：${result.total} 篇里有 ${result.moved} 篇要换位置，请在预览里确认`);
+    } catch (error) {
+      new Notice(`整理失败：${message(error)}`, 8000);
+      this.structureStep = (await this.plugin.organizer.plan()) ? 3 : 0;
+    }
+    this.setBusy(null);
+    await this.renderStructure();
+    this.structureEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  private async renderStructure() {
+    const box = this.structureEl;
+    box.empty();
+    const scope = this.currentScope();
+    const plan = await this.plugin.organizer.plan();
+    const planScope = await this.plugin.organizer.planScope();
+    const map = await this.plugin.organizer.map(scope);
+    const active = !!plan || map.changed > 0 || this.structureStep > 0;
+    this.structureActive = active;
+    this.mapChanged = map.changed;
+    this.refreshStickyBadges();
+    box.toggleClass('is-current', active);
+    this.renderContentHead();
+
+    const head = box.createDiv({ cls: 'eai-mod-head' });
+    this.modIcon(head, 'folder', 'is-violet');
+    const info = head.createDiv({ cls: 'eai-mod-text' });
+    const title = info.createDiv({ cls: 'eai-mod-title-row' });
+    title.createSpan({ cls: `eai-step-badge${active ? ' is-current' : ''}`, text: active ? '第 2 步 · 当前' : '第 2 步' });
+    title.createEl('h5', { text: '整理分类' });
+    info.createEl('p', { cls: 'eai-hint', text: '根据笔记设计子文件夹，先预览，确认后才会移动。' });
+    const actions = head.createDiv({ cls: 'eai-actions' });
+    if (active && map.changed) {
+      actions.createEl('button', { text: '放弃' }).onclick = async () => {
+        if (!(await this.confirm('放弃整理文件夹', '清空分类方案，并去掉本范围里的搬家预览。内容建议会保留。', '放弃'))) return;
+        await this.plugin.organizer.setPlan(null);
+        await this.plugin.organizer.clearFolderMoves(scope);
+        this.structureStep = 0;
+        this.planOpen = false;
+        this.mapOpen = null;
+        await this.renderStructure();
+        await this.renderList();
+      };
+      actions.createEl('button', { cls: 'mod-cta', text: `确认执行（${map.changed} 处）` }).onclick = async () => {
+        if (!(await this.confirm('确认执行', `将按预览新建文件夹，并移动/改名本范围有变化的笔记（约 ${map.changed} 篇）。其他笔记里的链接会自动更新。`, '全部执行'))) return;
+        await this.execute(true);
+      };
+    } else {
+      actions.createEl('button', { cls: 'mod-cta', text: '整理文件夹' }).onclick = () => this.runStructure();
+      if (active) {
+        actions.createEl('button', { text: '放弃' }).onclick = async () => {
+          if (!(await this.confirm('放弃整理文件夹', '清空分类方案，并去掉本范围里的搬家预览。内容建议会保留。', '放弃'))) return;
+          await this.plugin.organizer.setPlan(null);
+          await this.plugin.organizer.clearFolderMoves(scope);
+          this.structureStep = 0;
+          this.planOpen = false;
+          this.mapOpen = null;
+          await this.renderStructure();
+          await this.renderList();
+        };
+      }
+    }
+    if (active && plan?.some((folder) => folder.from.some((from) => from !== folder.path))) {
+      actions.createEl('button', { text: '只执行改名合并' }).onclick = () => this.runPlan();
+    }
+
+    const body = box.createDiv({ cls: 'eai-mod-body' });
+    if (!active) {
+      body.addClass('is-hidden');
+      return;
+    }
+
+    const progress = body.createDiv({ cls: 'eai-progress' });
+    progress.createDiv({ cls: 'eai-progress-label', text: '当前进度' });
+    const steps = progress.createDiv({ cls: 'eai-steps' });
+    const current =
+      this.structureStep === 1 ? 1
+        : this.structureStep === 2 ? 2
+          : 3;
+    for (const [i, label] of ['设计分类', '分配笔记', '预览确认', '保存到库'].entries()) {
+      const n = i + 1;
+      const state = n < current ? 'is-done' : n === current ? 'is-current' : 'is-todo';
+      const el = steps.createDiv({ cls: `eai-step ${state}` });
+      const mark = el.createDiv({ cls: 'eai-step-mark' });
+      mark.setText(n < current ? '✓' : String(n));
+      el.createDiv({ cls: 'eai-step-title', text: label });
+    }
+
+    if (plan && planScope !== scope) {
+      body.createEl('p', { cls: 'eai-warn', text: `当前方案是按「${this.scopeLabel(planScope)}」做的，上面选的是「${this.scopeLabel(scope)}」。要按新范围重做，再点「整理文件夹」。` });
+    }
+
+    if (plan) {
+      const fold = body.createEl('details', { cls: 'eai-fold' });
+      fold.open = this.planOpen;
+      fold.ontoggle = () => {
+        this.planOpen = fold.open;
+      };
+      const summary = fold.createEl('summary', { cls: 'eai-fold-summary' });
+      summary.createSpan({ text: `分类内容（${plan.length}）` });
+      if (!fold.open) summary.createSpan({ cls: 'eai-meta', text: ' · 点击展开' });
+      await this.renderPlanEditor(fold.createDiv({ cls: 'eai-fold-body' }), plan);
+    }
+
+    await this.renderMap(body, map);
+  }
+
+  private async renderPlanEditor(parent: HTMLElement, plan: PlanFolder[]) {
+    const box = parent.createDiv({ cls: 'eai-plan-edit' });
     const locked = this.plugin.organizer.locked();
-    if (locked.length) box.createEl('p', { cls: 'eai-hint', text: `受保护的文件夹（其他插件或附件、模板设置在用，不会改名或移走）：${locked.join('、')}` });
+    if (locked.length) box.createEl('p', { cls: 'eai-hint', text: `受保护的文件夹：${locked.join('、')}` });
     const existing = new Set(this.plugin.organizer.folders());
     const save = debounce(async () => {
       await this.plugin.organizer.setPlan(plan);
-      await this.renderMap();
+      await this.renderStructure();
     }, 600, true);
     plan.forEach((folder, i) => {
       const row = box.createDiv({ cls: 'eai-plan-row' });
@@ -318,60 +655,18 @@ export class OrganizeView extends ItemView {
         : moved.length > 1 || (moved.length && folder.from.includes(folder.path)) ? `合并：${folder.from.join('、')}` : moved.length ? `改名：原 ${moved[0]}` : '保留';
       const tag = row.createSpan({ cls: `eai-badge${badge === '新建' ? ' is-new' : badge === '保留' ? '' : ' is-change'}`, text: badge });
       tag.title = badge;
-      if (folder.from.some((from) => from !== folder.path && this.plugin.organizer.isLocked(from, locked))) row.createSpan({ cls: 'eai-badge', text: '含受保护文件夹，执行时会跳过' });
       row.createSpan({ cls: 'eai-meta eai-plan-desc', text: folder.desc });
       row.createEl('button', { text: '×' }).onclick = async () => {
         plan.splice(i, 1);
         await this.plugin.organizer.setPlan(plan);
-        await this.renderPlan();
-        await this.renderMap();
+        await this.renderStructure();
       };
     });
     box.createEl('button', { text: '加一个文件夹' }).onclick = async () => {
       plan.push({ path: '新分类', from: [], desc: '' });
       await this.plugin.organizer.setPlan(plan);
-      await this.renderPlan();
+      await this.renderStructure();
     };
-  }
-
-  private async designPlan() {
-    const scope = this.currentScope();
-    const text = scope === ALL || scope === ROOT ? 'AI 会参考你现有的文件夹、每个文件夹里的笔记标题和主题地图，设计一套文件夹结构。' : `AI 会参考「${scope}」里的子文件夹和笔记标题，只在「${scope}」里面设计子分类。`;
-    if (!(await confirmDialog(this.app, '设计分类方案', `${text}只调用一次模型，不会改动任何文件。`, '开始设计'))) return;
-    const notice = new Notice('正在设计分类方案…', 0);
-    try {
-      await this.plugin.organizer.generatePlan(scope);
-    } catch (error) {
-      new Notice(`设计失败：${message(error)}`, 8000);
-    }
-    notice.hide();
-    await this.renderPlan();
-    await this.renderMap();
-  }
-
-  private async classify() {
-    if (this.plugin.organizer.running) {
-      new Notice('正在处理，请稍等');
-      return;
-    }
-    const scope = await this.plugin.organizer.planScope();
-    const count = Math.min(this.plugin.organizer.notesIn(scope).length, RUN_LIMIT);
-    if (!count) {
-      new Notice('这个范围里没有可以分类的笔记');
-      return;
-    }
-    if (!(await confirmDialog(this.app, '按内容分类', `AI 会逐篇阅读「${this.scopeLabel(scope)}」里的 ${count} 篇笔记（标题、摘要和正文开头），给每篇选一个最合适的分类，大约调用模型 ${Math.ceil(count / 10)} 次。结果先放进笔记地图让你确认，不会马上移动。`, '开始分类'))) return;
-    try {
-      const result = await this.plugin.organizer.classify((done, total) => {
-        this.statusEl.setText(done < total ? `正在按内容分类：${done}/${total}…` : '');
-      });
-      new Notice(`分好了：${result.total} 篇里有 ${result.moved} 篇要换分类，请在笔记地图里确认`);
-    } catch (error) {
-      new Notice(`分类失败：${message(error)}`, 8000);
-    }
-    this.statusEl.setText('');
-    await this.renderList();
-    this.mapEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   private async runPlan() {
@@ -379,20 +674,24 @@ export class OrganizeView extends ItemView {
     const existing = new Set(this.plugin.organizer.folders());
     const created = plan.filter((folder) => !existing.has(folder.path)).length;
     const moved = plan.reduce((sum, folder) => sum + folder.from.filter((from) => from !== folder.path).length, 0);
-    if (!(await confirmDialog(this.app, '执行分类方案', `将新建 ${created} 个文件夹，把 ${moved} 个文件夹的内容移到新位置，其他笔记里的链接会自动更新。执行后会生成一篇整理记录。`, '执行'))) return;
+    if (!(await this.confirm('执行分类方案', `将新建 ${created} 个文件夹，把 ${moved} 个文件夹的内容移到新位置，其他笔记里的链接会自动更新。执行后会生成一篇整理记录。`, '执行'))) return;
     await this.execute(false);
   }
 
   private async execute(withSuggestions: boolean) {
-    const notice = new Notice('正在整理…', 0);
+    this.setBusy(withSuggestions ? '正在按预览执行…' : '正在执行文件夹改名和合并…');
     let changes = 0;
     try {
       changes += await this.plugin.organizer.applyPlan();
       if (withSuggestions) {
+        this.setBusy('正在移动和改名…');
+        const scope = this.currentScope();
         for (const item of [...(await this.plugin.organizer.suggestions())]) {
-          if (!Object.values(item.use).some(Boolean)) continue;
+          if (!this.inScope(item.path, scope)) continue;
+          if (!item.use.folder && !item.use.title) continue;
+          const onlyStructure = { ...item, use: { ...item.use, summary: false, tags: false, links: false } };
           try {
-            await this.plugin.organizer.apply(item);
+            await this.plugin.organizer.apply(onlyStructure);
             changes++;
           } catch (error) {
             new Notice(`「${item.path}」整理失败：${message(error)}`, 8000);
@@ -402,26 +701,38 @@ export class OrganizeView extends ItemView {
     } catch (error) {
       new Notice(`整理失败：${message(error)}`, 8000);
     }
-    notice.hide();
+    this.setBusy(null);
+    this.structureStep = 0;
+    this.mapOpen = null;
     const record = await this.plugin.organizer.writeRecord();
     new Notice(changes ? `整理完成，改动 ${changes} 处` : '没有需要改动的');
     if (record) await this.plugin.openNote(record.path, '', -1, true);
     await this.refresh();
   }
 
-  private async renderMap() {
-    const box = this.mapEl;
-    box.empty();
-    const map = await this.plugin.organizer.map();
-    const head = box.createDiv({ cls: 'eai-head' });
-    head.createEl('h5', { text: `笔记地图（整理后的样子）：${map.changed} 处变化` });
-    const tools = head.createDiv({ cls: 'eai-actions' });
+  private async renderMap(parent: HTMLElement, map: MapFolder) {
+    const scope = this.currentScope();
+    const fold = parent.createEl('details', { cls: 'eai-fold' });
+    fold.open = this.mapOpen ?? map.changed > 0;
+    fold.ontoggle = () => {
+      this.mapOpen = fold.open;
+    };
+    const summary = fold.createEl('summary', { cls: 'eai-fold-summary' });
+    summary.createSpan({ text: `执行预览（${this.scopeLabel(scope)}）：${map.changed} 处变化` });
+    if (map.changed) summary.createSpan({ cls: 'eai-badge is-new', text: '尚未写入库' });
+    if (!fold.open) summary.createSpan({ cls: 'eai-meta', text: map.changed ? ' · 点击展开' : ' · 暂无位置变化' });
+    const body = fold.createDiv({ cls: 'eai-fold-body' });
+    body.createEl('p', {
+      cls: 'eai-hint',
+      text: '还没真正移动。🆕 将新建，蓝色是会挪走或改名的笔记。'
+    });
+    const tools = body.createDiv({ cls: 'eai-actions' });
     const toggle = tools.createEl('label', { cls: 'eai-current' });
     const box2 = toggle.createEl('input', { type: 'checkbox' });
     box2.checked = this.onlyChanged;
     box2.onchange = () => {
       this.onlyChanged = box2.checked;
-      void this.renderMap();
+      void this.renderStructure();
     };
     toggle.createSpan({ text: '只看有变化的' });
     const logged = await this.plugin.organizer.logSize();
@@ -429,19 +740,12 @@ export class OrganizeView extends ItemView {
       tools.createEl('button', { text: `生成整理记录（${logged} 处）` }).onclick = async () => {
         const record = await this.plugin.organizer.writeRecord();
         if (record) await this.plugin.openNote(record.path, '', -1, true);
-        await this.renderMap();
+        await this.renderStructure();
       };
     }
-    if (map.changed || (await this.plugin.organizer.plan())) {
-      tools.createEl('button', { cls: 'mod-cta', text: '按地图全部执行' }).onclick = async () => {
-        if (!(await confirmDialog(this.app, '按地图全部执行', `执行分类方案，并应用所有勾选的整理建议（共 ${map.changed} 篇笔记有位置或标题变化）。其他笔记里的链接会自动更新，完成后生成一篇整理记录。`, '全部执行'))) return;
-        await this.execute(true);
-      };
-    }
-    box.createEl('p', { cls: 'eai-hint', text: '按「分类方案」和勾选的「整理建议」推算出来，还没有真正移动。🆕 是新建的文件夹，蓝色是从别处移来或改了名的笔记。' });
-    const tree = box.createDiv({ cls: 'eai-tree-root' });
+    const tree = body.createDiv({ cls: 'eai-tree-root' });
     this.renderTree(tree, map, 0);
-    if (!tree.childElementCount) tree.createEl('p', { cls: 'eai-hint', text: '还没有变化。' });
+    if (!tree.childElementCount) tree.createEl('p', { cls: 'eai-hint', text: '没有要挪的笔记。可改分类名后重做。' });
   }
 
   private renderTree(parent: HTMLElement, folder: MapFolder, depth: number) {
@@ -482,11 +786,11 @@ export class OrganizeView extends ItemView {
       const others = group.filter((item) => item !== path).map((item) => `《${item.split('/').pop()!.replace(/\.md$/i, '')}》`).join('、');
       const name = path.split('/').pop()!.replace(/\.md$/i, '');
       actions.createEl('button', { text: '保留这篇，删除其他' }).onclick = async () => {
-        if (!(await confirmDialog(this.app, '删除重复笔记', `保留《${name}》，把 ${others} 移到回收站？`, '删除其他'))) return;
+        if (!(await this.confirm('删除重复笔记', `保留《${name}》，把 ${others} 移到回收站？`, '删除其他'))) return;
         await this.act(() => this.plugin.organizer.keepOnly(path, group), '已删除重复笔记');
       };
       actions.createEl('button', { text: '合并到这篇' }).onclick = async () => {
-        if (!(await confirmDialog(this.app, '合并重复笔记', `把 ${others} 的正文和标签追加到《${name}》末尾，然后把它们移到回收站？`, '合并'))) return;
+        if (!(await this.confirm('合并重复笔记', `把 ${others} 的正文和标签追加到《${name}》末尾，然后把它们移到回收站？`, '合并'))) return;
         await this.act(() => this.plugin.organizer.merge(path, group), '已合并');
       };
     }
@@ -513,7 +817,7 @@ export class OrganizeView extends ItemView {
 
   private async run(paths: string[], label: string, scope: string) {
     if (this.plugin.organizer.running) {
-      new Notice('正在生成整理建议，请稍等');
+      new Notice('正在生成内容建议，请稍等');
       return;
     }
     if (!this.plugin.local.chatReady()) {
@@ -527,46 +831,75 @@ export class OrganizeView extends ItemView {
     }
     const count = Math.min(usable.length, RUN_LIMIT);
     const more = usable.length > count ? `（共 ${usable.length} 篇，这次先做前 ${count} 篇）` : '';
-    const ok = await confirmDialog(
-      this.app,
-      '生成整理建议',
-      `用 AI 为「${label}」的 ${count} 篇笔记生成整理建议${more}，大约调用模型 ${Math.ceil(count / 5)} 次。生成后你可以逐条修改和确认，确认之前不会改动任何笔记。`,
+    const ok = await this.confirm(
+      '生成内容建议',
+      `为「${label}」的 ${count} 篇笔记生成摘要、标签、标题和相关笔记${more}，大约 ${Math.ceil(count / 2)} 次。不搬家；确认前不改笔记。`,
       '开始生成'
     );
     if (!ok) return;
+    this.setBusy(`正在生成内容建议：0/${count}…`);
+    this.contentElBox.scrollIntoView({ block: 'nearest' });
     try {
       const made = await this.plugin.organizer.generate(usable, (done, total) => {
-        this.statusEl.setText(done < total ? `正在生成整理建议：${done}/${total}…` : '');
-      }, scope);
-      new Notice(`生成了 ${made} 条整理建议，请在下面确认`);
+        this.setBusy(done < total ? `正在生成内容建议：${done}/${total}…` : '正在整理生成结果…');
+      }, scope, true);
+      this.listOpen = true;
+      new Notice(`生成了 ${made} 条内容建议，请在下面确认`);
     } catch (error) {
       new Notice(`生成失败：${message(error)}`, 8000);
     }
-    this.statusEl.setText('');
+    this.setBusy(null);
     await this.renderList();
     this.plugin.refreshStatus();
   }
 
   private async renderList() {
-    const box = this.listEl;
+    const box = this.listBody;
     box.empty();
-    const list = await this.plugin.organizer.suggestions();
-    const head = box.createDiv({ cls: 'eai-head' });
-    head.createEl('h5', { text: `整理建议（${list.length}）` });
-    void this.renderMap();
+    const all = (await this.plugin.organizer.suggestions()).filter(isContentSuggestion);
+    const scope = this.currentScope();
+    const list = all.filter((item) => this.inScope(item.path, scope));
+    const other = all.length - list.length;
+    this.contentCount = list.length;
+    this.renderContentHead();
+    const fold = box.createEl('details', { cls: 'eai-fold' });
+    fold.open = this.listOpen;
+    fold.ontoggle = () => {
+      this.listOpen = fold.open;
+    };
+    const summary = fold.createEl('summary', { cls: 'eai-fold-summary eai-sugg-summary' });
+    const title = other > 0 ? `内容建议（本范围 ${list.length} / 另有其它范围 ${other}）` : `内容建议（${list.length} 条）`;
+    summary.createSpan({ text: title });
+    if (list.length) summary.createSpan({ cls: 'eai-meta', text: this.listOpen ? '' : ' · 展开查看' });
+    if (list.length) {
+      const tools = summary.createDiv({ cls: 'eai-actions eai-sugg-tools' });
+      tools.createEl('button', { cls: 'mod-cta', text: '应用全部勾选的' }).onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.applyAll(list);
+      };
+      tools.createEl('button', { text: '全部跳过' }).onclick = async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!(await this.confirm('全部跳过', `跳过本范围这 ${list.length} 条内容建议？`, '全部跳过'))) return;
+        for (const item of [...list]) await this.plugin.organizer.skip(item);
+        await this.renderList();
+      };
+    }
+    const body = fold.createDiv({ cls: 'eai-fold-body' });
+    if (other > 0) {
+      body.createEl('p', { cls: 'eai-hint', text: `另有 ${other} 条在别的范围，换上面的范围可看。` });
+    }
     if (!list.length) {
-      box.createEl('p', { cls: 'eai-hint', text: '还没有待确认的建议。在上面选一类笔记，点「整理这些」，或者按范围整理。' });
+      body.createEl('p', {
+        cls: 'eai-hint',
+        text: other > 0
+          ? '当前范围没有。可换范围，或点「生成内容建议」/诊断里的「补全这些」。'
+          : '还没有内容建议。'
+      });
       return;
     }
-    const tools = head.createDiv({ cls: 'eai-actions' });
-    tools.createEl('button', { cls: 'mod-cta', text: '应用全部勾选的' }).onclick = () => this.applyAll(list);
-    tools.createEl('button', { text: '全部跳过' }).onclick = async () => {
-      if (!(await confirmDialog(this.app, '全部跳过', `跳过这 ${list.length} 条建议？跳过的笔记不会再出现在「最近 7 天的新笔记」里。`, '全部跳过'))) return;
-      for (const item of [...list]) await this.plugin.organizer.skip(item);
-      await this.renderList();
-    };
-    const folders = this.plugin.organizer.targetFolders();
-    for (const item of list) this.renderCard(box, item, folders);
+    for (const item of list) this.renderCard(body, item);
   }
 
   private field(parent: HTMLElement, label: string, checked: boolean, onCheck: (value: boolean) => void) {
@@ -581,14 +914,16 @@ export class OrganizeView extends ItemView {
     return row.createDiv({ cls: 'eai-field-body' });
   }
 
-  private renderCard(parent: HTMLElement, item: Suggestion, folders: string[]) {
+  private renderCard(parent: HTMLElement, item: Suggestion) {
     const card = parent.createDiv({ cls: 'eai-card eai-suggest' });
-    const title = card.createEl('a', { cls: 'eai-link', text: item.path.split('/').pop()!.replace(/\.md$/i, ''), href: '#' });
+    const name = item.path.split('/').pop()!.replace(/\.md$/i, '');
+    const folder = folderOf(item.path) || '根目录';
+    const title = card.createEl('a', { cls: 'eai-link', text: name, href: '#' });
     title.onclick = (event) => {
       event.preventDefault();
       void this.plugin.openNote(item.path, '', -1, true);
     };
-    card.createDiv({ cls: 'eai-meta', text: item.path });
+    card.createSpan({ cls: 'eai-meta', text: `（${folder}）` });
     const text = (body: HTMLElement, value: string, placeholder: string, set: (value: string) => void) => {
       const input = body.createEl('input', { type: 'text', value, attr: { placeholder } });
       input.oninput = () => {
@@ -598,16 +933,6 @@ export class OrganizeView extends ItemView {
     };
     text(this.field(card, '摘要', item.use.summary, (v) => (item.use.summary = v)), item.summary, '一句话摘要', (v) => (item.summary = v));
     text(this.field(card, '加标签', item.use.tags, (v) => (item.use.tags = v)), item.tags.join(' '), '用空格分开', (v) => (item.tags = v.split(/[\s,，、]+/).filter(Boolean)));
-    const move = this.field(card, '移到', item.use.folder, (v) => (item.use.folder = v));
-    const select = move.createEl('select', { cls: 'dropdown' });
-    select.createEl('option', { text: '（根目录）', value: '' });
-    for (const folder of folders) select.createEl('option', { text: folder, value: folder });
-    select.value = item.folder;
-    select.onchange = () => {
-      item.folder = select.value;
-      this.persist();
-    };
-    if (item.folder === folderOf(item.path)) move.createSpan({ cls: 'eai-meta', text: ' 现在的位置' });
     text(this.field(card, '改标题', item.use.title, (v) => (item.use.title = v)), item.title, '不改名就留空', (v) => (item.title = v));
     const links = this.field(card, '相关笔记', item.use.links, (v) => (item.use.links = v));
     const renderLinks = () => {
@@ -627,8 +952,9 @@ export class OrganizeView extends ItemView {
     const actions = card.createDiv({ cls: 'eai-actions' });
     actions.createEl('button', { cls: 'mod-cta', text: '应用' }).onclick = async () => {
       try {
-        await this.plugin.organizer.apply(item);
-        new Notice('已整理');
+        const content = { ...item, use: { ...item.use, folder: false } };
+        await this.plugin.organizer.apply(content);
+        new Notice('已写入');
       } catch (error) {
         new Notice(`整理失败：${message(error)}`, 8000);
       }
@@ -640,22 +966,22 @@ export class OrganizeView extends ItemView {
     };
     actions.createEl('button', { cls: 'mod-warning', text: '删除' }).onclick = async () => {
       const name = item.path.split('/').pop()!.replace(/\.md$/i, '');
-      if (!(await confirmDialog(this.app, '删除笔记', `把《${name}》移到回收站？之后可以在回收站里找回。`, '删除'))) return;
+      if (!(await this.confirm('删除笔记', `把《${name}》移到回收站？之后可以在回收站里找回。`, '删除'))) return;
       await this.act(() => this.plugin.organizer.trash(item.path), '已移到回收站');
     };
   }
 
   private async applyAll(list: Suggestion[]) {
-    const chosen = list.filter((item) => Object.values(item.use).some(Boolean));
+    const chosen = list.filter((item) => item.use.summary || item.use.tags || item.use.title || item.use.links);
     if (!chosen.length) {
       new Notice('没有勾选任何修改');
       return;
     }
-    if (!(await confirmDialog(this.app, '应用整理建议', `把勾选的修改写入这 ${chosen.length} 篇笔记？移动和改名会自动更新其他笔记里指向它们的链接。`, '应用'))) return;
+    if (!(await this.confirm('应用内容建议', `把勾选的修改写入这 ${chosen.length} 篇笔记？不移动文件夹。`, '应用'))) return;
     let ok = 0;
     for (const item of chosen) {
       try {
-        await this.plugin.organizer.apply(item);
+        await this.plugin.organizer.apply({ ...item, use: { ...item.use, folder: false } });
         ok++;
       } catch (error) {
         new Notice(`「${item.path}」整理失败：${message(error)}`, 8000);

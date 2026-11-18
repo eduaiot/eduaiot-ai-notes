@@ -143,7 +143,7 @@ export class TodayView extends ItemView {
       button.createDiv({ cls: 'eai-meta', text: desc });
       button.onclick = () => void run();
     };
-    add('整理笔记', '体检 + AI 整理建议', () => this.plugin.openOrganize());
+    add('整理笔记', '诊断 + AI 整理建议', () => this.plugin.openOrganize());
     add('本周周报', '回顾这 7 天', () => this.plugin.reviewer.weekly(true));
     add('爆款规律', '拆解收藏的短视频', () => this.plugin.skills.runByName('爆款规律'));
     add('选题生成', '10 个能做的选题', () => this.plugin.skills.runByName('选题生成'));

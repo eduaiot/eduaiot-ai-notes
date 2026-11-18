@@ -88,7 +88,7 @@ export default class AiNotesPlugin extends Plugin {
     this.addCommand({ id: 'search', name: '按意思搜笔记', callback: () => new SearchModal(this.app, this).open() });
     this.addCommand({ id: 'related', name: '打开相关笔记侧栏', callback: () => this.openView(RELATED_VIEW) });
     this.addCommand({ id: 'today', name: '打开今日笔记（每日回顾）', callback: () => this.openView(TODAY_VIEW) });
-    this.addCommand({ id: 'organize', name: '整理笔记（体检和 AI 整理建议）', callback: () => this.openOrganize() });
+    this.addCommand({ id: 'organize', name: '整理笔记（诊断和 AI 整理建议）', callback: () => this.openOrganize() });
     this.addCommand({ id: 'skill', name: '运行技能…', callback: () => this.openSkills() });
     this.addCommand({ id: 'market', name: '打开技能市场', callback: () => this.openMarket() });
     this.addCommand({ id: 'weekly', name: '生成本周周报', callback: () => this.reviewer.weekly(true) });
@@ -195,7 +195,7 @@ export default class AiNotesPlugin extends Plugin {
     await this.saveData(this.settings);
     await this.local.start();
     await this.openOrganize();
-    new Notice('欢迎使用易度助手！先给笔记做个体检，看看哪些需要整理。', 10000);
+    new Notice('欢迎使用易度助手！先给笔记做个诊断，看看哪些需要整理。', 10000);
     new InterviewModal(this.app, this).open();
   }
 
